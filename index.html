@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GPX Cycling Power Calculator</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3350;
+      --accent: #5b8dee;
+      --accent2: #7c5ce5;
+      --green: #00d68f;
+      --orange: #f9a825;
+      --red: #e05c5c;
+      --text: #e8eaf6;
+      --muted: #7880a4;
+      --radius: 12px;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header .logo {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    header .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    /* Upload Zone */
+    #upload-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: calc(100vh - 120px);
+    }
+
+    #upload-section h1 {
+      font-size: 36px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #e8eaf6, var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    #upload-section p.lead {
+      color: var(--muted);
+      font-size: 16px;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    #drop-zone {
+      width: 100%;
+      max-width: 560px;
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 56px 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      background: var(--surface);
+    }
+
+    #drop-zone:hover, #drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(91, 141, 238, 0.06);
+    }
+
+    #drop-zone .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    #drop-zone h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    #drop-zone p {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    #file-input { display: none; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: #4a7de0; }
+
+    .btn-secondary {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover { background: var(--border); }
+
+    #upload-section .browse-btn {
+      margin-top: 20px;
+    }
+
+    /* Params */
+    .params-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-top: 32px;
+      width: 100%;
+      max-width: 560px;
+    }
+
+    .params-card h3 {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    .params-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .param-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .param-group label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .param-group .input-wrap {
+      position: relative;
+    }
+
+    .param-group input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 40px 9px 12px;
+      color: var(--text);
+      font-size: 14px;
+      transition: border-color 0.15s;
+    }
+
+    .param-group input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .param-group .unit {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 11px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    /* Results layout */
+    #results-section { display: none; }
+
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .file-info .filename {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .file-info .filemeta {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* Stat cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .stat-card .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .stat-card .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .stat-card .stat-unit {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .stat-card.accent { border-color: rgba(91,141,238,0.4); }
+    .stat-card.accent .stat-value { color: var(--accent); }
+    .stat-card.green { border-color: rgba(0,214,143,0.4); }
+    .stat-card.green .stat-value { color: var(--green); }
+    .stat-card.orange { border-color: rgba(249,168,37,0.4); }
+    .stat-card.orange .stat-value { color: var(--orange); }
+    .stat-card.red { border-color: rgba(224,92,92,0.4); }
+    .stat-card.red .stat-value { color: var(--red); }
+
+    /* Charts grid */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .chart-card.wide {
+      grid-column: 1 / -1;
+    }
+
+    .chart-card h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
+
+    .chart-card canvas {
+      max-height: 220px;
+    }
+
+    /* Map */
+    #map {
+      height: 380px;
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .map-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .map-card h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
+
+    /* Power zones */
+    .zones-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .zones-card h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+    }
+
+    .zone-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .zone-bar-row .zone-name {
+      width: 90px;
+      flex-shrink: 0;
+    }
+
+    .zone-bar-row .zone-bar-bg {
+      flex: 1;
+      height: 18px;
+      background: var(--surface2);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .zone-bar-row .zone-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.6s ease;
+    }
+
+    .zone-bar-row .zone-pct {
+      width: 42px;
+      text-align: right;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    /* Params panel in results */
+    .params-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+
+    .params-panel h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 14px;
+    }
+
+    .params-inline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: flex-end;
+    }
+
+    .params-inline .param-group {
+      flex: 0 0 auto;
+      min-width: 120px;
+    }
+
+    .recalc-btn {
+      align-self: flex-end;
+    }
+
+    /* Loading */
+    #loading {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15,17,23,0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    #loading.show { display: flex; }
+
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Error */
+    .error-toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--red);
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 2000;
+      display: none;
+    }
+
+    .error-toast.show { display: block; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .charts-grid { grid-template-columns: 1fr; }
+      .charts-grid .chart-card.wide { grid-column: 1; }
+      header { padding: 14px 16px; }
+      .container { padding: 20px 16px; }
+      #upload-section h1 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">&#9889; PowerCalc</span>
+  <span class="subtitle">GPX Cycling Power Calculator</span>
+</header>
+
+<div id="loading"><div class="spinner"></div><span style="color:var(--muted)">Analysing GPX file…</span></div>
+<div class="error-toast" id="error-toast"></div>
+
+<!-- ───── Upload Section ───── -->
+<div class="container" id="upload-section">
+  <h1>Calculate Cycling Power</h1>
+  <p class="lead">Upload a GPX file from your ride and estimate power output using a physics-based model.</p>
+
+  <div id="drop-zone">
+    <div class="icon">&#128200;</div>
+    <h3>Drop your GPX file here</h3>
+    <p>or click to browse</p>
+    <input type="file" id="file-input" accept=".gpx" />
+  </div>
+  <button class="btn btn-primary browse-btn" onclick="document.getElementById('file-input').click()">
+    &#128193; Choose GPX File
+  </button>
+
+  <div class="params-card">
+    <h3>Rider &amp; Equipment</h3>
+    <div class="params-grid">
+      <div class="param-group">
+        <label>Rider Weight</label>
+        <div class="input-wrap">
+          <input type="number" id="p-rider" value="75" step="0.5" min="30" max="200" />
+          <span class="unit">kg</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Bike Weight</label>
+        <div class="input-wrap">
+          <input type="number" id="p-bike" value="8" step="0.5" min="3" max="30" />
+          <span class="unit">kg</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>CdA (drag area)</label>
+        <div class="input-wrap">
+          <input type="number" id="p-cda" value="0.32" step="0.01" min="0.1" max="0.8" />
+          <span class="unit">m²</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Crr (rolling res.)</label>
+        <div class="input-wrap">
+          <input type="number" id="p-crr" value="0.004" step="0.0005" min="0.001" max="0.02" />
+          <span class="unit"></span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Air Density</label>
+        <div class="input-wrap">
+          <input type="number" id="p-rho" value="1.225" step="0.01" min="0.9" max="1.4" />
+          <span class="unit">kg/m³</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Drivetrain Loss</label>
+        <div class="input-wrap">
+          <input type="number" id="p-loss" value="2" step="0.5" min="0" max="10" />
+          <span class="unit">%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───── Results Section ───── -->
+<div class="container" id="results-section">
+
+  <div class="top-bar">
+    <div class="file-info">
+      <span style="font-size:20px">&#128200;</span>
+      <div>
+        <div class="filename" id="res-filename">ride.gpx</div>
+        <div class="filemeta" id="res-meta">—</div>
+      </div>
+    </div>
+    <button class="btn btn-secondary" id="reset-btn">&#8592; New File</button>
+  </div>
+
+  <!-- Inline params for recalc -->
+  <div class="params-panel">
+    <h4>Parameters</h4>
+    <div class="params-inline">
+      <div class="param-group">
+        <label>Rider Weight</label>
+        <div class="input-wrap">
+          <input type="number" id="r-rider" value="75" step="0.5" min="30" max="200" />
+          <span class="unit">kg</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Bike Weight</label>
+        <div class="input-wrap">
+          <input type="number" id="r-bike" value="8" step="0.5" min="3" max="30" />
+          <span class="unit">kg</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>CdA</label>
+        <div class="input-wrap">
+          <input type="number" id="r-cda" value="0.32" step="0.01" min="0.1" max="0.8" />
+          <span class="unit">m²</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Crr</label>
+        <div class="input-wrap">
+          <input type="number" id="r-crr" value="0.004" step="0.0005" min="0.001" max="0.02" />
+          <span class="unit"></span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Air Density</label>
+        <div class="input-wrap">
+          <input type="number" id="r-rho" value="1.225" step="0.01" min="0.9" max="1.4" />
+          <span class="unit">kg/m³</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Drivetrain Loss</label>
+        <div class="input-wrap">
+          <input type="number" id="r-loss" value="2" step="0.5" min="0" max="10" />
+          <span class="unit">%</span>
+        </div>
+      </div>
+      <button class="btn btn-primary recalc-btn" id="recalc-btn">&#9889; Recalculate</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card accent">
+      <div class="stat-label">Avg Power</div>
+      <div class="stat-value" id="s-avg-power">—</div>
+      <div class="stat-unit">watts</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">Max Power</div>
+      <div class="stat-value" id="s-max-power">—</div>
+      <div class="stat-unit">watts</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Normalised Power</div>
+      <div class="stat-value" id="s-np">—</div>
+      <div class="stat-unit">watts</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="stat-label">Avg Speed</div>
+      <div class="stat-value" id="s-avg-speed">—</div>
+      <div class="stat-unit">km/h</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Distance</div>
+      <div class="stat-value" id="s-dist">—</div>
+      <div class="stat-unit">km</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Elevation Gain</div>
+      <div class="stat-value" id="s-elev">—</div>
+      <div class="stat-unit">m</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Duration</div>
+      <div class="stat-value" id="s-duration">—</div>
+      <div class="stat-unit"></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Work</div>
+      <div class="stat-value" id="s-work">—</div>
+      <div class="stat-unit">kJ</div>
+    </div>
+  </div>
+
+  <!-- Power chart -->
+  <div class="charts-grid">
+    <div class="chart-card wide">
+      <h4>Power &amp; Elevation vs Distance</h4>
+      <canvas id="chart-power"></canvas>
+    </div>
+    <div class="chart-card">
+      <h4>Speed vs Distance</h4>
+      <canvas id="chart-speed"></canvas>
+    </div>
+    <div class="chart-card">
+      <h4>Grade vs Distance</h4>
+      <canvas id="chart-grade"></canvas>
+    </div>
+  </div>
+
+  <!-- Power breakdown + zones -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" id="breakdown-row">
+    <div class="chart-card">
+      <h4>Power Breakdown</h4>
+      <canvas id="chart-breakdown" style="max-height:260px"></canvas>
+    </div>
+    <div class="zones-card">
+      <h4>Power Zones (% of Avg)</h4>
+      <div id="zones-container"></div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div class="map-card">
+    <h4>Route Map <span style="color:var(--muted);font-weight:400;font-size:11px">(colour = power intensity)</span></h4>
+    <div id="map"></div>
+  </div>
+
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let gpxPoints = [];     // raw parsed points
+let rideData  = null;   // processed data after physics calc
+let charts    = {};
+let leafletMap = null;
+let mapLayers  = [];
+
+// ─── GPX Parsing ─────────────────────────────────────────────────────────────
+function parseGPX(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Invalid XML in GPX file');
+
+  const trkpts = doc.querySelectorAll('trkpt');
+  if (!trkpts.length) throw new Error('No track points found in GPX file');
+
+  const points = [];
+  trkpts.forEach(pt => {
+    const lat = parseFloat(pt.getAttribute('lat'));
+    const lon = parseFloat(pt.getAttribute('lon'));
+    const eleEl = pt.querySelector('ele');
+    const timeEl = pt.querySelector('time');
+    if (isNaN(lat) || isNaN(lon)) return;
+    points.push({
+      lat,
+      lon,
+      ele: eleEl ? parseFloat(eleEl.textContent) : null,
+      time: timeEl ? new Date(timeEl.textContent) : null,
+    });
+  });
+
+  if (points.length < 2) throw new Error('Not enough track points (need ≥ 2)');
+  return points;
+}
+
+// ─── Haversine distance (m) ───────────────────────────────────────────────────
+function haversine(p1, p2) {
+  const R = 6371000;
+  const φ1 = p1.lat * Math.PI / 180, φ2 = p2.lat * Math.PI / 180;
+  const Δφ = (p2.lat - p1.lat) * Math.PI / 180;
+  const Δλ = (p2.lon - p1.lon) * Math.PI / 180;
+  const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ─── Smooth array with simple moving average ─────────────────────────────────
+function smooth(arr, w) {
+  const out = [];
+  for (let i = 0; i < arr.length; i++) {
+    const start = Math.max(0, i - Math.floor(w/2));
+    const end   = Math.min(arr.length, i + Math.ceil(w/2));
+    const slice = arr.slice(start, end);
+    out.push(slice.reduce((a,b) => a+b, 0) / slice.length);
+  }
+  return out;
+}
+
+// ─── Physics model ───────────────────────────────────────────────────────────
+// Returns power in watts at a given point
+function calcPower(speedMs, gradeRatio, params) {
+  const { mass, cda, crr, rho, eff } = params;
+  const g = 9.8067;
+  const theta = Math.atan(gradeRatio);
+  const Fg = mass * g * Math.sin(theta);        // gravity
+  const Fr = mass * g * Math.cos(theta) * crr;  // rolling
+  const Fa = 0.5 * rho * cda * speedMs * speedMs; // aero (force)
+  const F  = Fg + Fr + Fa;
+  const P  = F * speedMs / eff;
+  return Math.max(0, P);
+}
+
+// ─── Normalised Power (NP) ────────────────────────────────────────────────────
+function normalisedPower(powers) {
+  if (powers.length < 30) return avg(powers);
+  // 30-second rolling average, then 4th power mean
+  const w = 30;
+  const rolling = [];
+  for (let i = 0; i < powers.length; i++) {
+    const s = Math.max(0, i - w + 1);
+    const slice = powers.slice(s, i+1);
+    rolling.push(slice.reduce((a,b)=>a+b,0)/slice.length);
+  }
+  const mean4 = rolling.reduce((a,b) => a + b**4, 0) / rolling.length;
+  return Math.pow(mean4, 0.25);
+}
+
+function avg(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
+
+// ─── Process ride ─────────────────────────────────────────────────────────────
+function processRide(points, rawParams) {
+  const params = {
+    mass: rawParams.rider + rawParams.bike,
+    cda:  rawParams.cda,
+    crr:  rawParams.crr,
+    rho:  rawParams.rho,
+    eff:  1 - rawParams.loss / 100,
+  };
+
+  const n = points.length;
+  const dist   = [0];   // cumulative distance (m)
+  const speed  = [];    // m/s
+  const grade  = [];    // ratio
+  const power  = [];    // W
+  const Pg     = [];    // gravity component
+  const Pr     = [];    // rolling component
+  const Pa     = [];    // aero component
+
+  const SMOOTH_W = 7; // window for grade smoothing
+
+  // First pass: distances
+  for (let i = 1; i < n; i++) {
+    dist.push(dist[i-1] + haversine(points[i-1], points[i]));
+  }
+
+  // Determine timing
+  const hasTime = points.every(p => p.time instanceof Date && !isNaN(p.time));
+  const hasEle  = points.every(p => p.ele !== null && !isNaN(p.ele));
+
+  // Grade array (raw)
+  const rawGrade = [0];
+  for (let i = 1; i < n; i++) {
+    const dx = dist[i] - dist[i-1];
+    if (dx < 0.1) { rawGrade.push(rawGrade[i-1]); continue; }
+    const dz = hasEle ? (points[i].ele - points[i-1].ele) : 0;
+    rawGrade.push(dz / dx);
+  }
+
+  const smoothGrade = smooth(rawGrade, SMOOTH_W);
+
+  // Speed array
+  for (let i = 0; i < n; i++) {
+    if (i === 0) { speed.push(0); continue; }
+    const dx = dist[i] - dist[i-1];
+    let dt;
+    if (hasTime) {
+      dt = (points[i].time - points[i-1].time) / 1000; // seconds
+      if (dt <= 0) dt = 1;
+    } else {
+      // Estimate time from typical cycling speed (20 km/h fallback)
+      dt = dx / (20 / 3.6);
+    }
+    speed.push(dx / dt);
+  }
+
+  const smoothSpeed = smooth(speed, 5);
+
+  // Power calculation
+  for (let i = 0; i < n; i++) {
+    const v  = Math.max(0, smoothSpeed[i]);
+    const g  = smoothGrade[i];
+    const { mass, cda, crr, rho, eff } = params;
+    const theta = Math.atan(g);
+    const fGrav = mass * 9.8067 * Math.sin(theta);
+    const fRoll = mass * 9.8067 * Math.cos(theta) * crr;
+    const fAero = 0.5 * rho * cda * v * v;
+    const f = fGrav + fRoll + fAero;
+    const p = Math.max(0, f * v / eff);
+    power.push(p);
+    Pg.push(Math.max(0, fGrav * v / eff));
+    Pr.push(Math.max(0, fRoll * v / eff));
+    Pa.push(Math.max(0, fAero * v / eff));
+    grade.push(g * 100); // percent
+  }
+
+  // Duration
+  let durationSec = 0;
+  if (hasTime && n > 1) {
+    durationSec = (points[n-1].time - points[0].time) / 1000;
+  } else {
+    // estimate from distances
+    for (let i = 1; i < n; i++) {
+      const v = smoothSpeed[i] || 5;
+      durationSec += (dist[i]-dist[i-1]) / v;
+    }
+  }
+
+  // Elevation gain
+  let elevGain = 0;
+  if (hasEle) {
+    for (let i = 1; i < n; i++) {
+      const dz = points[i].ele - points[i-1].ele;
+      if (dz > 0) elevGain += dz;
+    }
+  }
+
+  // Work (kJ) = sum of power * time_per_segment
+  let work = 0;
+  for (let i = 1; i < n; i++) {
+    const dx = dist[i] - dist[i-1];
+    const v  = smoothSpeed[i] || 1;
+    const dt = dx / v;
+    work += power[i] * dt;
+  }
+
+  const distKm  = dist[dist.length-1] / 1000;
+  const distArr = dist.map(d => d / 1000); // km
+
+  return {
+    points, distArr, speed: smoothSpeed, grade, power,
+    Pg, Pr, Pa,
+    avgPower: avg(power),
+    maxPower: Math.max(...power),
+    np:       normalisedPower(power),
+    avgSpeed: avg(smoothSpeed) * 3.6,
+    distKm,
+    elevGain,
+    durationSec,
+    work: work / 1000,
+    hasEle,
+    hasTime,
+  };
+}
+
+// ─── Rendering ────────────────────────────────────────────────────────────────
+function formatDuration(s) {
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${m}:${String(sec).padStart(2,'0')}`;
+}
+
+function renderStats(d) {
+  document.getElementById('s-avg-power').textContent = Math.round(d.avgPower);
+  document.getElementById('s-max-power').textContent = Math.round(d.maxPower);
+  document.getElementById('s-np').textContent        = Math.round(d.np);
+  document.getElementById('s-avg-speed').textContent = d.avgSpeed.toFixed(1);
+  document.getElementById('s-dist').textContent      = d.distKm.toFixed(2);
+  document.getElementById('s-elev').textContent      = Math.round(d.elevGain);
+  document.getElementById('s-duration').textContent  = formatDuration(d.durationSec);
+  document.getElementById('s-work').textContent      = Math.round(d.work);
+}
+
+// Downsample for chart performance
+function downsample(arr, maxPts) {
+  if (arr.length <= maxPts) return arr;
+  const step = arr.length / maxPts;
+  const out = [];
+  for (let i = 0; i < maxPts; i++) out.push(arr[Math.round(i * step)]);
+  return out;
+}
+
+function buildCharts(d) {
+  const MAX = 600;
+  const xs  = downsample(d.distArr, MAX);
+  const pw  = downsample(d.power,   MAX);
+  const sp  = downsample(d.speed.map(v => v * 3.6), MAX);
+  const gr  = downsample(d.grade,   MAX);
+  const el  = d.hasEle ? downsample(d.points.map(p=>p.ele), MAX) : null;
+
+  const commonOpts = {
+    responsive: true,
+    animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { labels: { color: '#7880a4', boxWidth: 12 } } },
+    scales: {
+      x: { grid: { color: '#2e3350' }, ticks: { color: '#7880a4', maxTicksLimit: 8 } },
+    }
+  };
+
+  // ── Power + elevation chart ──
+  if (charts.power) charts.power.destroy();
+  const ctxP = document.getElementById('chart-power').getContext('2d');
+  const datasets = [{
+    label: 'Power (W)',
+    data: pw,
+    borderColor: '#5b8dee',
+    backgroundColor: 'rgba(91,141,238,0.12)',
+    fill: true,
+    tension: 0.3,
+    pointRadius: 0,
+    borderWidth: 2,
+    yAxisID: 'yP',
+  }];
+  const scales = {
+    ...commonOpts.scales,
+    yP: {
+      type: 'linear', position: 'left',
+      grid: { color: '#2e3350' },
+      ticks: { color: '#5b8dee' },
+      title: { display: true, text: 'Power (W)', color: '#5b8dee' },
+    }
+  };
+  if (el) {
+    datasets.push({
+      label: 'Elevation (m)',
+      data: el,
+      borderColor: '#00d68f',
+      backgroundColor: 'rgba(0,214,143,0.08)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2,
+      yAxisID: 'yE',
+    });
+    scales.yE = {
+      type: 'linear', position: 'right',
+      grid: { drawOnChartArea: false },
+      ticks: { color: '#00d68f' },
+      title: { display: true, text: 'Elevation (m)', color: '#00d68f' },
+    };
+  }
+  charts.power = new Chart(ctxP, {
+    type: 'line',
+    data: { labels: xs.map(x => x.toFixed(1)), datasets },
+    options: { ...commonOpts, scales },
+  });
+
+  // ── Speed chart ──
+  if (charts.speed) charts.speed.destroy();
+  charts.speed = new Chart(document.getElementById('chart-speed'), {
+    type: 'line',
+    data: { labels: xs.map(x=>x.toFixed(1)), datasets: [{
+      label: 'Speed (km/h)', data: sp,
+      borderColor: '#f9a825', backgroundColor: 'rgba(249,168,37,0.1)',
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2
+    }]},
+    options: { ...commonOpts, scales: {
+      ...commonOpts.scales,
+      y: { grid: { color: '#2e3350' }, ticks: { color: '#7880a4' },
+           title: { display: true, text: 'km/h', color: '#7880a4' } }
+    }},
+  });
+
+  // ── Grade chart ──
+  if (charts.grade) charts.grade.destroy();
+  charts.grade = new Chart(document.getElementById('chart-grade'), {
+    type: 'line',
+    data: { labels: xs.map(x=>x.toFixed(1)), datasets: [{
+      label: 'Grade (%)', data: gr,
+      borderColor: '#7c5ce5', backgroundColor: 'rgba(124,92,229,0.1)',
+      fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2
+    }]},
+    options: { ...commonOpts, scales: {
+      ...commonOpts.scales,
+      y: { grid: { color: '#2e3350' }, ticks: { color: '#7880a4' },
+           title: { display: true, text: '%', color: '#7880a4' } }
+    }},
+  });
+
+  // ── Power breakdown doughnut ──
+  const avgPg = avg(d.Pg), avgPr = avg(d.Pr), avgPa = avg(d.Pa);
+  if (charts.breakdown) charts.breakdown.destroy();
+  charts.breakdown = new Chart(document.getElementById('chart-breakdown'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Gravity', 'Rolling Resistance', 'Aerodynamic Drag'],
+      datasets: [{
+        data: [avgPg, avgPr, avgPa].map(v => Math.round(v)),
+        backgroundColor: ['#e05c5c', '#f9a825', '#5b8dee'],
+        borderWidth: 0,
+        hoverOffset: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: '#7880a4', boxWidth: 12, padding: 12 }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${ctx.parsed} W (${Math.round(ctx.parsed/(avgPg+avgPr+avgPa)*100)}%)`
+          }
+        }
+      }
+    }
+  });
+
+  // ── Power zones ──
+  renderZones(d.power);
+}
+
+function renderZones(powers) {
+  const avgP = avg(powers);
+  const zones = [
+    { name: 'Z1 Active', max: 0.55 * avgP, color: '#7880a4' },
+    { name: 'Z2 Endurance', max: 0.75 * avgP, color: '#5b8dee' },
+    { name: 'Z3 Tempo', max: 0.90 * avgP, color: '#00d68f' },
+    { name: 'Z4 Threshold', max: 1.05 * avgP, color: '#f9a825' },
+    { name: 'Z5 VO2Max', max: 1.20 * avgP, color: '#e05c5c' },
+    { name: 'Z6 Anaerobic', max: Infinity, color: '#7c5ce5' },
+  ];
+
+  const counts = new Array(zones.length).fill(0);
+  powers.forEach(p => {
+    for (let z = 0; z < zones.length; z++) {
+      if (p <= zones[z].max) { counts[z]++; break; }
+    }
+  });
+  const total = powers.length;
+  const container = document.getElementById('zones-container');
+  container.innerHTML = zones.map((z, i) => {
+    const pct = total ? (counts[i]/total*100).toFixed(1) : 0;
+    return `<div class="zone-bar-row">
+      <span class="zone-name" style="color:${z.color}">${z.name}</span>
+      <div class="zone-bar-bg">
+        <div class="zone-bar-fill" style="width:${pct}%;background:${z.color}"></div>
+      </div>
+      <span class="zone-pct">${pct}%</span>
+    </div>`;
+  }).join('');
+}
+
+function renderMap(d) {
+  if (leafletMap) {
+    mapLayers.forEach(l => leafletMap.removeLayer(l));
+    mapLayers = [];
+  } else {
+    leafletMap = L.map('map', { zoomControl: true });
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+      maxZoom: 19,
+    }).addTo(leafletMap);
+  }
+
+  const maxP = Math.max(...d.power);
+  const minP = Math.min(...d.power);
+
+  // Colour scale: blue → green → yellow → red
+  function powerColor(p) {
+    const t = maxP > minP ? (p - minP) / (maxP - minP) : 0.5;
+    if (t < 0.33) {
+      const u = t / 0.33;
+      return `hsl(${210 - u*90},80%,55%)`;
+    } else if (t < 0.67) {
+      const u = (t - 0.33) / 0.34;
+      return `hsl(${120 - u*60},80%,50%)`;
+    } else {
+      const u = (t - 0.67) / 0.33;
+      return `hsl(${60 - u*60},90%,50%)`;
+    }
+  }
+
+  const step = Math.max(1, Math.floor(d.points.length / 600));
+  for (let i = step; i < d.points.length; i += step) {
+    const p1 = d.points[i - step];
+    const p2 = d.points[i];
+    const pw = (d.power[i] + d.power[i - step]) / 2;
+    const line = L.polyline([[p1.lat, p1.lon],[p2.lat, p2.lon]], {
+      color: powerColor(pw), weight: 4, opacity: 0.9
+    }).addTo(leafletMap);
+    mapLayers.push(line);
+  }
+
+  // Start / end markers
+  const start = d.points[0];
+  const end   = d.points[d.points.length - 1];
+
+  const startIcon = L.divIcon({ html: '<div style="background:#00d68f;width:12px;height:12px;border-radius:50%;border:2px solid #fff"></div>', iconSize:[12,12], iconAnchor:[6,6] });
+  const endIcon   = L.divIcon({ html: '<div style="background:#e05c5c;width:12px;height:12px;border-radius:50%;border:2px solid #fff"></div>', iconSize:[12,12], iconAnchor:[6,6] });
+
+  const sm = L.marker([start.lat, start.lon], { icon: startIcon }).bindTooltip('Start').addTo(leafletMap);
+  const em = L.marker([end.lat, end.lon],   { icon: endIcon }).bindTooltip('End').addTo(leafletMap);
+  mapLayers.push(sm, em);
+
+  const latlngs = d.points.map(p => [p.lat, p.lon]);
+  leafletMap.fitBounds(L.latLngBounds(latlngs), { padding: [24, 24] });
+}
+
+// ─── Main flow ────────────────────────────────────────────────────────────────
+function getParams(prefix) {
+  return {
+    rider: parseFloat(document.getElementById(`${prefix}-rider`).value) || 75,
+    bike:  parseFloat(document.getElementById(`${prefix}-bike`).value)  || 8,
+    cda:   parseFloat(document.getElementById(`${prefix}-cda`).value)   || 0.32,
+    crr:   parseFloat(document.getElementById(`${prefix}-crr`).value)   || 0.004,
+    rho:   parseFloat(document.getElementById(`${prefix}-rho`).value)   || 1.225,
+    loss:  parseFloat(document.getElementById(`${prefix}-loss`).value)  || 2,
+  };
+}
+
+function syncParams(from, to) {
+  ['rider','bike','cda','crr','rho','loss'].forEach(k => {
+    document.getElementById(`${to}-${k}`).value = document.getElementById(`${from}-${k}`).value;
+  });
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+function showLoading(v) {
+  document.getElementById('loading').classList.toggle('show', v);
+}
+
+function handleFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.gpx')) {
+    showError('Please select a .gpx file');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    showLoading(true);
+    setTimeout(() => {
+      try {
+        gpxPoints = parseGPX(e.target.result);
+        const params = getParams('p');
+        syncParams('p', 'r');
+        rideData = processRide(gpxPoints, params);
+        showResults(file.name, rideData);
+      } catch(err) {
+        showError(err.message);
+      } finally {
+        showLoading(false);
+      }
+    }, 30);
+  };
+  reader.readAsText(file);
+}
+
+function showResults(filename, d) {
+  document.getElementById('upload-section').style.display = 'none';
+  document.getElementById('results-section').style.display = 'block';
+
+  document.getElementById('res-filename').textContent = filename;
+  const meta = `${d.distKm.toFixed(2)} km · ${formatDuration(d.durationSec)} · ${Math.round(d.elevGain)}m gain`;
+  document.getElementById('res-meta').textContent = meta;
+
+  renderStats(d);
+  buildCharts(d);
+  renderMap(d);
+}
+
+// ─── Event wiring ─────────────────────────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', e => {
+  handleFile(e.target.files[0]);
+});
+
+const dropZone = document.getElementById('drop-zone');
+dropZone.addEventListener('click', () => document.getElementById('file-input').click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  handleFile(e.dataTransfer.files[0]);
+});
+
+document.getElementById('reset-btn').addEventListener('click', () => {
+  document.getElementById('upload-section').style.display = 'flex';
+  document.getElementById('results-section').style.display = 'none';
+  document.getElementById('file-input').value = '';
+  gpxPoints = [];
+  rideData  = null;
+});
+
+document.getElementById('recalc-btn').addEventListener('click', () => {
+  if (!gpxPoints.length) return;
+  showLoading(true);
+  setTimeout(() => {
+    try {
+      const params = getParams('r');
+      rideData = processRide(gpxPoints, params);
+      renderStats(rideData);
+      buildCharts(rideData);
+      renderMap(rideData);
+    } catch(err) {
+      showError(err.message);
+    } finally {
+      showLoading(false);
+    }
+  }, 30);
+});
+
+// Responsive breakdown row
+function adjustLayout() {
+  const row = document.getElementById('breakdown-row');
+  if (window.innerWidth < 768) {
+    row.style.gridTemplateColumns = '1fr';
+  } else {
+    row.style.gridTemplateColumns = '1fr 1fr';
+  }
+}
+window.addEventListener('resize', adjustLayout);
+adjustLayout();
+</script>
+</body>
+</html>
