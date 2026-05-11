@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fit-file-parser/dist/fit-parser.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -461,7 +462,7 @@
 
 <header>
   <span class="logo">&#9889; PowerCalc</span>
-  <span class="subtitle">GPX Cycling Power Calculator</span>
+  <span class="subtitle">GPX / FIT Cycling Power Calculator</span>
 </header>
 
 <div id="loading">
@@ -473,13 +474,13 @@
 <!-- ───── Upload Section ───── -->
 <div class="container" id="upload-section">
   <h1>Calculate Cycling Power</h1>
-  <p class="lead">Upload a GPX file from your ride and estimate power output using a physics-based model.</p>
+  <p class="lead">Upload a GPX or FIT file from your ride and estimate power output using a physics-based model.</p>
 
   <div id="drop-zone">
     <div class="icon">&#128200;</div>
-    <h3>Drop your GPX file here</h3>
-    <p>or click to browse</p>
-    <input type="file" id="file-input" accept=".gpx" />
+    <h3>Drop your GPX or FIT file here</h3>
+    <p>or click to browse &nbsp;·&nbsp; .gpx and .fit supported</p>
+    <input type="file" id="file-input" accept=".gpx,.fit" />
   </div>
   <button class="btn btn-primary browse-btn" onclick="document.getElementById('file-input').click()">
     &#128193; Choose GPX File
@@ -729,6 +730,34 @@ function parseGPX(text) {
 
   if (points.length < 2) throw new Error('Not enough track points (need ≥ 2)');
   return points;
+}
+
+// ─── FIT Parsing ─────────────────────────────────────────────────────────────
+// fit-file-parser returns position_lat/lon already converted to decimal degrees.
+function parseFIT(buffer) {
+  return new Promise((resolve, reject) => {
+    if (typeof FitParser === 'undefined') {
+      reject(new Error('FIT parser library failed to load'));
+      return;
+    }
+    const parser = new FitParser({ force: true, lengthUnit: 'm', elapsedRecordField: true, mode: 'list' });
+    parser.parse(buffer, (error, data) => {
+      if (error) { reject(new Error('FIT parse error: ' + error)); return; }
+
+      const records = (data.records || []).filter(
+        r => r.position_lat != null && r.position_long != null
+      );
+
+      if (records.length < 2) { reject(new Error('No GPS data found in FIT file')); return; }
+
+      resolve(records.map(r => ({
+        lat:  r.position_lat,
+        lon:  r.position_long,
+        ele:  r.altitude  != null ? r.altitude  : null,
+        time: r.timestamp instanceof Date ? r.timestamp : null,
+      })));
+    });
+  });
 }
 
 // ─── Haversine distance (m) ───────────────────────────────────────────────────
@@ -1325,38 +1354,52 @@ function setWindBadge(text, isError) {
 }
 
 // ─── File handling ────────────────────────────────────────────────────────────
-function handleFile(file) {
+function readFileAs(file, type) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    if (type === 'text') reader.readAsText(file);
+    else                 reader.readAsArrayBuffer(file);
+  });
+}
+
+async function handleFile(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.gpx')) { showError('Please select a .gpx file'); return; }
+  const name  = file.name.toLowerCase();
+  const isGPX = name.endsWith('.gpx');
+  const isFIT = name.endsWith('.fit');
+  if (!isGPX && !isFIT) { showError('Please select a .gpx or .fit file'); return; }
 
-  const reader = new FileReader();
-  reader.onload = e => {
-    showLoading(true, 'Analysing GPX file…');
-    setTimeout(() => {
-      try {
-        gpxPoints = parseGPX(e.target.result);
-        windComponents = null;
+  showLoading(true, `Parsing ${isGPX ? 'GPX' : 'FIT'} file…`);
+  try {
+    let points;
+    if (isGPX) {
+      const text = await readFileAs(file, 'text');
+      points = parseGPX(text);
+    } else {
+      const buffer = await readFileAs(file, 'binary');
+      points = await parseFIT(buffer);
+    }
 
-        const params = getParams('p');
-        syncParams('p', 'r');
-        rideData = processRide(gpxPoints, params, null);
+    gpxPoints      = points;
+    windComponents = null;
 
-        // Show wind button only when GPX has timestamps
-        const hasTime = gpxPoints.every(p => p.time instanceof Date && !isNaN(p.time));
-        const windControls = document.getElementById('wind-controls');
-        windControls.style.display = hasTime ? 'flex' : 'none';
-        setWindBadge('', false);
-        document.getElementById('fetch-wind-btn').disabled = false;
+    const params = getParams('p');
+    syncParams('p', 'r');
+    rideData = processRide(gpxPoints, params, null);
 
-        showResults(file.name, rideData);
-      } catch(err) {
-        showError(err.message);
-      } finally {
-        showLoading(false);
-      }
-    }, 30);
-  };
-  reader.readAsText(file);
+    const hasTime = gpxPoints.every(p => p.time instanceof Date && !isNaN(p.time));
+    document.getElementById('wind-controls').style.display = hasTime ? 'flex' : 'none';
+    setWindBadge('', false);
+    document.getElementById('fetch-wind-btn').disabled = false;
+
+    showResults(file.name, rideData);
+  } catch(err) {
+    showError(err.message);
+  } finally {
+    showLoading(false);
+  }
 }
 
 function showResults(filename, d) {
