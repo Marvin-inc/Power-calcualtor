@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/fit-file-parser/dist/fit-parser.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -732,32 +731,144 @@ function parseGPX(text) {
   return points;
 }
 
-// ─── FIT Parsing ─────────────────────────────────────────────────────────────
-// fit-file-parser returns position_lat/lon already converted to decimal degrees.
+// ─── FIT Binary Decoder ──────────────────────────────────────────────────────
+// Self-contained, no external library. Supports standard ANT+ FIT format
+// (Garmin, COROS, Wahoo, Polar, etc.).
 function parseFIT(buffer) {
   return new Promise((resolve, reject) => {
-    if (typeof FitParser === 'undefined') {
-      reject(new Error('FIT parser library failed to load'));
-      return;
-    }
-    const parser = new FitParser({ force: true, lengthUnit: 'm', elapsedRecordField: true, mode: 'list' });
-    parser.parse(buffer, (error, data) => {
-      if (error) { reject(new Error('FIT parse error: ' + error)); return; }
-
-      const records = (data.records || []).filter(
-        r => r.position_lat != null && r.position_long != null
-      );
-
-      if (records.length < 2) { reject(new Error('No GPS data found in FIT file')); return; }
-
-      resolve(records.map(r => ({
-        lat:  r.position_lat,
-        lon:  r.position_long,
-        ele:  r.altitude  != null ? r.altitude  : null,
-        time: r.timestamp instanceof Date ? r.timestamp : null,
-      })));
-    });
+    try {
+      const pts = _decodeFIT(buffer);
+      if (pts.length < 2) reject(new Error('No GPS data found in FIT file'));
+      else resolve(pts);
+    } catch(e) { reject(e); }
   });
+}
+
+function _decodeFIT(buffer) {
+  const view  = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+
+  // ── Header ──
+  if (buffer.byteLength < 12) throw new Error('File too small to be a FIT file');
+  const magic = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+  if (magic !== '.FIT') throw new Error('Not a valid FIT file (missing .FIT signature)');
+
+  const headerSize = bytes[0];
+  const dataSize   = view.getUint32(4, true);   // little-endian
+  const endOffset  = headerSize + dataSize;
+  if (endOffset > buffer.byteLength) throw new Error('FIT file appears truncated');
+
+  // FIT epoch = Dec 31 1989 00:00:00 UTC = Unix 631065600 s
+  const FIT_EPOCH = 631065600;
+  const SC2DEG    = 180 / 2147483648; // semicircles → degrees
+
+  const defs = {};   // localMsgType → definition
+  const recs = [];   // collected GPS records
+  let pos = headerSize;
+
+  while (pos < endOffset) {
+    const hdr = bytes[pos++];
+
+    // ── Compressed timestamp record (bit 7 set) ──
+    if (hdr & 0x80) {
+      const lt = (hdr >> 5) & 0x03;
+      if (defs[lt]) pos += defs[lt].dataSize + defs[lt].devSize;
+      continue;
+    }
+
+    const hasDev   = !!(hdr & 0x20);
+    const isDef    = !!(hdr & 0x40);
+    const lt       = hdr & 0x0F;
+
+    if (isDef) {
+      // ── Definition message ──
+      pos++;                                          // reserved
+      const bigEndian    = bytes[pos++] !== 0;
+      const globalMsgNum = view.getUint16(pos, !bigEndian); pos += 2;
+      const nFields      = bytes[pos++];
+
+      const fields = [];
+      for (let i = 0; i < nFields; i++) {
+        const fnum = bytes[pos++];
+        const fsz  = bytes[pos++];
+        const ftyp = bytes[pos++];
+        fields.push({ fnum, size: fsz, type: ftyp, bigEndian });
+      }
+
+      let devSize = 0;
+      if (hasDev) {
+        const nDev = bytes[pos++];
+        for (let i = 0; i < nDev; i++) { devSize += bytes[pos + 1]; pos += 3; }
+      }
+
+      defs[lt] = {
+        globalMsgNum, fields,
+        dataSize: fields.reduce((s, f) => s + f.size, 0),
+        devSize,
+      };
+
+    } else {
+      // ── Data message ──
+      const def = defs[lt];
+      if (!def) { /* unknown local type — can't safely advance */ break; }
+
+      const msgStart = pos;
+
+      if (def.globalMsgNum === 20) {    // message 20 = "record" (GPS/sensor)
+        let lat = null, lon = null, ele = null, ts = null;
+        let fp  = msgStart;
+
+        for (const f of def.fields) {
+          const v = _fitVal(view, fp, f);
+          if (v !== null) {
+            switch (f.fnum) {
+              case 253:                                         // timestamp (uint32)
+                if (v !== 0xFFFFFFFF) ts = new Date((v + FIT_EPOCH) * 1000);
+                break;
+              case 0:                                           // position_lat (sint32)
+                if (v !== 0x7FFFFFFF) lat = v * SC2DEG;
+                break;
+              case 1:                                           // position_long (sint32)
+                if (v !== 0x7FFFFFFF) lon = v * SC2DEG;
+                break;
+              case 2:                                           // altitude uint16 (scale 5, offset 500)
+                if (v !== 0xFFFF) ele = v / 5 - 500;
+                break;
+              case 78:                                          // enhanced_altitude uint32
+                if (v !== 0xFFFFFFFF) ele = v / 5 - 500;      // overrides field 2
+                break;
+            }
+          }
+          fp += f.size;
+        }
+
+        if (lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+          recs.push({ lat, lon, ele, time: ts });
+        }
+      }
+
+      pos = msgStart + def.dataSize + def.devSize;
+    }
+  }
+
+  return recs;
+}
+
+// Read a single FIT field value given its base-type byte.
+// Bits 5–6 of the type byte are reserved; mask with 0x9F to normalise.
+function _fitVal(view, offset, field) {
+  const le = !field.bigEndian;
+  switch (field.type & 0x9F) {
+    case 0x00: case 0x02: case 0x0A: return view.getUint8(offset);
+    case 0x01:                       return view.getInt8(offset);
+    case 0x03:                       return view.getInt16(offset, le);
+    case 0x04: case 0x0B:            return view.getUint16(offset, le);
+    case 0x05:                       return view.getInt32(offset, le);
+    case 0x06: case 0x0C:            return view.getUint32(offset, le);
+    case 0x08:                       return view.getFloat32(offset, le);
+    case 0x09:                       return view.getFloat64(offset, le);
+    default:                         return null;
+  }
 }
 
 // ─── Haversine distance (m) ───────────────────────────────────────────────────
