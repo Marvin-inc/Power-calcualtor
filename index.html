@@ -855,10 +855,10 @@ function _decodeFIT(buffer) {
 }
 
 // Read a single FIT field value given its base-type byte.
-// Bits 5–6 of the type byte are reserved; mask with 0x9F to normalise.
+// Bits 5–7 are flags (endian ability, reserved); mask with 0x1F to get the base type number.
 function _fitVal(view, offset, field) {
   const le = !field.bigEndian;
-  switch (field.type & 0x9F) {
+  switch (field.type & 0x1F) {
     case 0x00: case 0x02: case 0x0A: return view.getUint8(offset);
     case 0x01:                       return view.getInt8(offset);
     case 0x03:                       return view.getInt16(offset, le);
