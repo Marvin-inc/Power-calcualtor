@@ -765,6 +765,21 @@ function smooth(arr, w) {
 
 function avg(arr) { return arr.reduce((a,b) => a+b, 0) / arr.length; }
 
+// Time-aware rolling average. cumTimeSec[i] = elapsed seconds at point i.
+// Falls back to index-based window when all times are equal.
+function smoothByTime(arr, cumTimeSec, windowSec) {
+  const half = windowSec / 2;
+  const out = new Array(arr.length);
+  for (let i = 0; i < arr.length; i++) {
+    const t = cumTimeSec[i];
+    let sum = arr[i], count = 1;
+    for (let j = i - 1; j >= 0 && t - cumTimeSec[j] <= half; j--) { sum += arr[j]; count++; }
+    for (let j = i + 1; j < arr.length && cumTimeSec[j] - t <= half; j++) { sum += arr[j]; count++; }
+    out[i] = sum / count;
+  }
+  return out;
+}
+
 // ─── Open-Meteo wind fetch ────────────────────────────────────────────────────
 // Returns per-point headwind components (m/s). Positive = headwind, negative = tailwind.
 async function fetchWindData(points) {
@@ -951,6 +966,21 @@ function processRide(points, rawParams, windComps) {
     Pa.push(Math.max(0, (0.5 * rho * cda * vEff * Math.abs(vEff)) * v / eff));
     grade.push(g * 100);
   }
+
+  // Cumulative elapsed time (seconds) per point — used for 15 s power smoothing
+  const cumTime = [0];
+  for (let i = 1; i < n; i++) {
+    if (hasTime) {
+      cumTime.push((points[i].time - points[0].time) / 1000);
+    } else {
+      const dx = dist[i] - dist[i-1];
+      cumTime.push(cumTime[i-1] + dx / (smoothSpeed[i] || 5));
+    }
+  }
+
+  // 15-second rolling average on power
+  const smoothedPower = smoothByTime(power, cumTime, 15);
+  for (let i = 0; i < n; i++) power[i] = smoothedPower[i];
 
   // Duration
   let durationSec = 0;
