@@ -1054,14 +1054,26 @@ function processRide(points, rawParams, windComps) {
   }
 
   const hasTime = points.every(p => p.time instanceof Date && !isNaN(p.time));
-  const hasEle  = points.every(p => p.ele !== null && !isNaN(p.ele));
+  // Consider elevation available if >50% of points have it; forward-fill the sparse nulls
+  const eleCount = points.filter(p => p.ele !== null && !isNaN(p.ele)).length;
+  const hasEle   = eleCount > n * 0.5;
+  const ele = (() => {
+    if (!hasEle) return new Array(n).fill(null);
+    const arr = points.map(p => (p.ele !== null && !isNaN(p.ele)) ? p.ele : null);
+    // forward-fill then backward-fill to cover leading nulls
+    let last = arr.find(v => v !== null) ?? 0;
+    for (let i = 0; i < n; i++) { if (arr[i] !== null) last = arr[i]; else arr[i] = last; }
+    last = arr[n-1];
+    for (let i = n-1; i >= 0; i--) { if (arr[i] !== null) last = arr[i]; else arr[i] = last; }
+    return arr;
+  })();
 
   // Raw grade
   const rawGrade = [0];
   for (let i = 1; i < n; i++) {
     const dx = dist[i] - dist[i-1];
     if (dx < 0.1) { rawGrade.push(rawGrade[i-1]); continue; }
-    const dz = hasEle ? (points[i].ele - points[i-1].ele) : 0;
+    const dz = hasEle ? (ele[i] - ele[i-1]) : 0;
     rawGrade.push(dz / dx);
   }
   const smoothGrade = smooth(rawGrade, 7);
@@ -1136,7 +1148,7 @@ function processRide(points, rawParams, windComps) {
   let elevGain = 0;
   if (hasEle) {
     for (let i = 1; i < n; i++) {
-      const dz = points[i].ele - points[i-1].ele;
+      const dz = ele[i] - ele[i-1];
       if (dz > 0) elevGain += dz;
     }
   }
@@ -1151,6 +1163,7 @@ function processRide(points, rawParams, windComps) {
 
   return {
     points,
+    ele,
     distArr:  dist.map(d => d / 1000),
     speed:    smoothSpeed,
     grade,
@@ -1216,7 +1229,7 @@ function buildCharts(d) {
   const pw  = downsample(d.power,   MAX);
   const sp  = downsample(d.speed.map(v => v * 3.6), MAX);
   const gr  = downsample(d.grade,   MAX);
-  const el  = d.hasEle ? downsample(d.points.map(p => p.ele), MAX) : null;
+  const el  = d.hasEle ? downsample(d.ele, MAX) : null;
   const wnd = d.hasWind ? downsample(d.wind, MAX) : null;
 
   const commonOpts = {
