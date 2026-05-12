@@ -454,6 +454,129 @@
 
     .error-toast.show { display: block; }
 
+    /* ── CdA Estimator Modal ── */
+    #cda-modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15,17,23,0.88);
+      z-index: 1500;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #cda-modal-overlay.show { display: flex; }
+
+    #cda-modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      width: 100%;
+      max-width: 660px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    #cda-modal h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    #cda-modal .modal-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+
+    .cda-inputs-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .cda-cd-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .cda-cd-row label {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .cda-cd-row input[type=radio] { accent-color: var(--accent); }
+
+    #cda-results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+
+    #cda-results-table th {
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #cda-results-table td {
+      padding: 10px 10px;
+      border-bottom: 1px solid rgba(46,51,80,0.5);
+      vertical-align: middle;
+    }
+
+    #cda-results-table tr.mean-row td {
+      font-weight: 600;
+      color: var(--accent);
+      border-top: 1px solid var(--border);
+    }
+
+    #cda-results-table tr.incomplete td {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .apply-cda-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(91,141,238,0.4);
+      background: rgba(91,141,238,0.12);
+      color: var(--accent);
+      transition: all 0.15s;
+    }
+
+    .apply-cda-btn:hover { background: rgba(91,141,238,0.25); }
+    .apply-cda-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    .btn-estimate {
+      background: rgba(124,92,229,0.15);
+      color: var(--accent2);
+      border: 1px solid rgba(124,92,229,0.35);
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+    .btn-estimate:hover { background: rgba(124,92,229,0.28); }
+
     /* ── Responsive ── */
     @media (max-width: 768px) {
       .charts-grid { grid-template-columns: 1fr; }
@@ -470,6 +593,83 @@
   <span class="logo">&#9889; PowerCalc</span>
   <span class="subtitle">GPX / FIT Cycling Power Calculator</span>
 </header>
+
+<!-- ───── CdA Estimator Modal ───── -->
+<div id="cda-modal-overlay">
+  <div id="cda-modal">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+      <h3>&#128101; CdA Estimator</h3>
+      <button onclick="document.getElementById('cda-modal-overlay').classList.remove('show')"
+              style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:0 4px">&#10005;</button>
+    </div>
+    <p class="modal-subtitle">Estimates frontal area from anthropometric measurements using five published equations, then multiplies by Cd to arrive at CdA. Typical uncertainty: ±0.016–0.019 m² (5–10%).</p>
+
+    <div class="cda-inputs-grid">
+      <div class="param-group">
+        <label>Height</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-height" placeholder="1.78" step="0.01" min="1.4" max="2.2" />
+          <span class="unit">m</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Body Mass</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-mass" placeholder="75" step="0.5" min="40" max="150" />
+          <span class="unit">kg</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Shoulder Width</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-sw" placeholder="0.42" step="0.01" min="0.30" max="0.60" />
+          <span class="unit">m</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Seat Tube Angle</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-sta" placeholder="76" step="1" min="60" max="90" />
+          <span class="unit">°</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Torso Angle</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-ta" placeholder="12" step="1" min="2" max="45" />
+          <span class="unit">°</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="font-size:11px;color:var(--muted);margin-top:-10px;margin-bottom:16px">
+      STA = seat tube angle from horizontal &nbsp;·&nbsp; TA = torso angle from horizontal (aero position: 5–15°, road: 25–40°) &nbsp;·&nbsp; SW = biacromial width
+    </div>
+
+    <div class="cda-cd-row">
+      <span style="font-size:12px;color:var(--muted);margin-right:4px">Cd model:</span>
+      <label><input type="radio" name="cd-mode" value="kyle" checked /> Kyle fixed &nbsp;<strong>0.707</strong>&nbsp; <span style="color:var(--muted)">(recommended)</span></label>
+      <label><input type="radio" name="cd-mode" value="heil" /> Heil mass-based &nbsp;<strong id="cd-heil-val">—</strong></label>
+    </div>
+
+    <table id="cda-results-table">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>A (m²)</th>
+          <th>Cd</th>
+          <th>CdA (m²)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="cda-tbody"></tbody>
+    </table>
+
+    <div style="font-size:11px;color:var(--muted);line-height:1.6">
+      Sources: AIS (Sam Callan / USA Cycling) · Bassett et al., Med Sci Sports Exerc 1999 · Heil, Eur J Appl Physiol 2001 · Cd reference: Kyle, Cycling Science 1991
+    </div>
+  </div>
+</div>
 
 <div id="loading">
   <div class="spinner"></div>
@@ -510,7 +710,10 @@
         </div>
       </div>
       <div class="param-group">
-        <label>CdA (drag area)</label>
+        <label style="display:flex;justify-content:space-between;align-items:center">
+          CdA (drag area)
+          <button class="btn btn-estimate" onclick="openCdAEstimator()">&#128101; Estimate</button>
+        </label>
         <div class="input-wrap">
           <input type="number" id="p-cda" value="0.32" step="0.01" min="0.1" max="0.8" />
           <span class="unit">m²</span>
@@ -584,7 +787,10 @@
         </div>
       </div>
       <div class="param-group">
-        <label>CdA</label>
+        <label style="display:flex;justify-content:space-between;align-items:center">
+          CdA
+          <button class="btn btn-estimate" onclick="openCdAEstimator()">&#128101; Estimate</button>
+        </label>
         <div class="input-wrap">
           <input type="number" id="r-cda" value="0.32" step="0.01" min="0.1" max="0.8" />
           <span class="unit">m²</span>
@@ -1103,6 +1309,147 @@ function normalisedPower(powers) {
   const mean4 = rolling.reduce((a,b) => a + b**4, 0) / rolling.length;
   return Math.pow(mean4, 0.25);
 }
+
+// ─── CdA Estimator ───────────────────────────────────────────────────────────
+const CDA_FORMULAS = [
+  {
+    id: 'ais',
+    label: 'AIS (Sam Callan / USA Cycling)',
+    needs: ['h','m'],
+    see: 0.013,
+    fn: ({h, m}) => 0.18964*h + 0.00215*m - 0.07861,
+  },
+  {
+    id: 'bassett',
+    label: 'Bassett et al. 1999',
+    needs: ['h','m'],
+    see: 0.009,
+    fn: ({h, m}) => 0.0293*h*Math.pow(m, 0.425) + 0.0604,
+  },
+  {
+    id: 'heil1',
+    label: 'Heil 2001 (mass + angles)',
+    needs: ['m','sta','ta'],
+    see: 0.017,
+    fn: ({m, sta, ta}) => 0.00433*Math.pow(sta,0.172)*Math.pow(ta,0.096)*Math.pow(m,0.762) + 0.066,
+  },
+  {
+    id: 'heil2',
+    label: 'Heil 2001 (mass + height + angles)',
+    needs: ['h','m','sta','ta'],
+    see: 0.014,
+    fn: ({h, m, sta, ta}) => 0.00653*Math.pow(sta,0.183)*Math.pow(ta,0.099)*Math.pow(m,0.493)*Math.pow(h,1.163) + 0.066,
+  },
+  {
+    id: 'heil3',
+    label: 'Heil 2001 (full, incl. shoulder width)',
+    needs: ['h','m','sta','ta','sw'],
+    see: 0.013,
+    fn: ({h, m, sta, ta, sw}) => 0.0148*Math.pow(sta,0.184)*Math.pow(ta,0.099)*Math.pow(m,0.408)*Math.pow(h,0.925)*Math.pow(sw,0.426) + 0.066,
+  },
+];
+
+function getCdMode() {
+  return document.querySelector('input[name="cd-mode"]:checked').value;
+}
+
+function getCdValue(mass) {
+  return getCdMode() === 'heil' ? 4.45 * Math.pow(mass, -0.45) : 0.707;
+}
+
+function getCdAInputs() {
+  return {
+    h:   parseFloat(document.getElementById('cda-height').value) || null,
+    m:   parseFloat(document.getElementById('cda-mass').value)   || null,
+    sta: parseFloat(document.getElementById('cda-sta').value)    || null,
+    ta:  parseFloat(document.getElementById('cda-ta').value)     || null,
+    sw:  parseFloat(document.getElementById('cda-sw').value)     || null,
+  };
+}
+
+function renderCdATable() {
+  const inp  = getCdAInputs();
+  const mass = inp.m;
+  const cd   = mass ? getCdValue(mass) : null;
+
+  document.getElementById('cd-heil-val').textContent =
+    mass ? (4.45 * Math.pow(mass, -0.45)).toFixed(3) : '—';
+
+  const tbody = document.getElementById('cda-tbody');
+  tbody.innerHTML = '';
+
+  const cdas = [];
+
+  CDA_FORMULAS.forEach(f => {
+    const complete = f.needs.every(k => inp[k] !== null && !isNaN(inp[k]) && inp[k] > 0);
+    const tr = document.createElement('tr');
+    if (!complete) tr.className = 'incomplete';
+
+    let aVal = null, cdaVal = null;
+    if (complete) {
+      aVal   = f.fn(inp);
+      cdaVal = aVal * (cd ?? 0.707);
+      cdas.push(cdaVal);
+    }
+
+    tr.innerHTML = `
+      <td>${f.label}<br><span style="font-size:10px;color:var(--muted)">S.E.E. ±${f.see} m²</span></td>
+      <td>${aVal   !== null ? aVal.toFixed(4)   : '—'}</td>
+      <td>${cd     !== null ? cd.toFixed(3)      : '—'}</td>
+      <td style="font-weight:600">${cdaVal !== null ? cdaVal.toFixed(4) : '—'}</td>
+      <td><button class="apply-cda-btn" ${cdaVal === null ? 'disabled' : ''}
+            onclick="applyCdA(${cdaVal !== null ? cdaVal.toFixed(4) : 0})">Apply</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Mean row
+  if (cdas.length > 0) {
+    const mean = cdas.reduce((a,b) => a+b, 0) / cdas.length;
+    const tr = document.createElement('tr');
+    tr.className = 'mean-row';
+    tr.innerHTML = `
+      <td>Mean of ${cdas.length} estimate${cdas.length>1?'s':''}</td>
+      <td></td>
+      <td></td>
+      <td>${mean.toFixed(4)}</td>
+      <td><button class="apply-cda-btn" onclick="applyCdA(${mean.toFixed(4)})">Apply</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function applyCdA(val) {
+  const rounded = Math.round(val * 1000) / 1000;
+  document.getElementById('p-cda').value = rounded;
+  document.getElementById('r-cda').value = rounded;
+  document.getElementById('cda-modal-overlay').classList.remove('show');
+}
+
+function openCdAEstimator() {
+  // Pre-populate mass from rider params if set
+  const massEl = document.getElementById('cda-mass');
+  if (!massEl.value) {
+    const riderEl = document.getElementById('p-rider') || document.getElementById('r-rider');
+    if (riderEl && riderEl.value) massEl.value = riderEl.value;
+  }
+  renderCdATable();
+  document.getElementById('cda-modal-overlay').classList.add('show');
+}
+
+// Close on overlay click
+document.getElementById('cda-modal-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('cda-modal-overlay'))
+    document.getElementById('cda-modal-overlay').classList.remove('show');
+});
+
+// Live-update table when inputs change
+['cda-height','cda-mass','cda-sta','cda-ta','cda-sw'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderCdATable);
+});
+document.querySelectorAll('input[name="cd-mode"]').forEach(r => {
+  r.addEventListener('change', renderCdATable);
+});
 
 // ─── Process ride ─────────────────────────────────────────────────────────────
 function processRide(points, rawParams, weather) {
