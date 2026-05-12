@@ -142,6 +142,13 @@
     .btn-wind:hover { background: rgba(0,200,224,0.25); }
     .btn-wind:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    .btn-export {
+      background: rgba(0,214,143,0.15);
+      color: var(--green);
+      border: 1px solid rgba(0,214,143,0.35);
+    }
+    .btn-export:hover { background: rgba(0,214,143,0.25); }
+
     #upload-section .browse-btn { margin-top: 20px; }
 
     /* ── Params ── */
@@ -552,7 +559,10 @@
         <div class="filemeta" id="res-meta">—</div>
       </div>
     </div>
-    <button class="btn btn-secondary" id="reset-btn">&#8592; New File</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-export" id="export-fit-btn" style="display:none">&#11015; Export FIT with Power</button>
+      <button class="btn btn-secondary" id="reset-btn">&#8592; New File</button>
+    </div>
   </div>
 
   <!-- Params + wind controls -->
@@ -710,12 +720,14 @@
 
 <script>
 // ─── State ───────────────────────────────────────────────────────────────────
-let gpxPoints      = [];    // raw parsed GPX points
-let windComponents = null;  // per-point headwind (m/s), null = not fetched
-let rideData       = null;
-let charts         = {};
-let leafletMap     = null;
-let mapLayers      = [];
+let gpxPoints        = [];    // raw parsed points
+let windComponents   = null;  // per-point headwind (m/s)
+let rideData         = null;
+let originalFITBuf   = null;  // ArrayBuffer of uploaded FIT, for power export
+let originalFITName  = '';
+let charts           = {};
+let leafletMap       = null;
+let mapLayers        = [];
 
 // ─── GPX Parsing ─────────────────────────────────────────────────────────────
 function parseGPX(text) {
@@ -1455,6 +1467,159 @@ function renderMap(d) {
   leafletMap.fitBounds(L.latLngBounds(d.points.map(p => [p.lat,p.lon])), { padding: [24,24] });
 }
 
+// ─── FIT Export ───────────────────────────────────────────────────────────────
+// Standard FIT CRC-16 (from the ANT+ FIT SDK).
+function fitCRC(bytes, start, length) {
+  const t = [
+    0x0000,0xCC01,0xD801,0x1400,0xF001,0x3C00,0x2800,0xE401,
+    0xA001,0x6C00,0x7800,0xB401,0x5000,0x9C01,0x8801,0x4400,
+  ];
+  let crc = 0;
+  for (let i = start; i < start + length; i++) {
+    const b = bytes[i];
+    let tmp = t[crc & 0xF]; crc = (crc >> 4) & 0x0FFF; crc ^= tmp ^ t[b & 0xF];
+    tmp     = t[crc & 0xF]; crc = (crc >> 4) & 0x0FFF; crc ^= tmp ^ t[(b >> 4) & 0xF];
+  }
+  return crc;
+}
+
+// Patches an original FIT binary in-place (byte by byte) to add field 7
+// (power, uint16, watts) to every message-20 definition and its data records.
+// powers[] is indexed the same as gpxPoints — one value per GPS record.
+function buildFITWithPower(srcBuffer, powers) {
+  const src     = new Uint8Array(srcBuffer);
+  const srcView = new DataView(srcBuffer);
+
+  const headerSize  = src[0];
+  const srcDataSize = srcView.getUint32(4, true);
+  const srcEnd      = headerSize + srcDataSize;
+
+  const out  = [];
+  const defs = {};       // local type → definition
+  let gpsIdx = 0;        // index into powers[]
+
+  // Copy the file header — we'll patch data-size and CRC afterwards.
+  for (let i = 0; i < headerSize; i++) out.push(src[i]);
+
+  // Return the value of position_lat from a data block already in `src`.
+  function latVal(dataStart, def) {
+    let fp = dataStart;
+    for (const f of def.fields) {
+      if (f.fnum === 0 && f.fsz === 4)
+        return srcView.getInt32(fp, !def.bigEndian);
+      fp += f.fsz;
+    }
+    return 0x7FFFFFFF; // not found
+  }
+
+  // Append 2-byte LE power (0xFFFF = invalid/no GPS).
+  function pushPower(dataStart, def) {
+    const lv  = latVal(dataStart, def);
+    const deg = lv * (180 / 2147483648);
+    const hasGPS = lv !== 0x7FFFFFFF && Math.abs(deg) <= 90;
+    let pw = 0xFFFF;
+    if (hasGPS && gpsIdx < powers.length)
+      pw = Math.min(0xFFFE, Math.max(0, Math.round(powers[gpsIdx++])));
+    out.push(pw & 0xFF, (pw >> 8) & 0xFF);
+  }
+
+  let pos = headerSize;
+
+  while (pos < srcEnd) {
+    if (pos >= src.length) break;
+    const hdr = src[pos++];
+
+    // ── Compressed timestamp record (bit 7 set) ──
+    if (hdr & 0x80) {
+      out.push(hdr);
+      const lt  = (hdr >> 5) & 0x03;
+      const def = defs[lt];
+      if (!def) break;
+      const ds = pos;
+      for (let i = 0; i < def.dataSize; i++) out.push(src[pos++]);
+      if (def.global === 20 && def.powerAdded) pushPower(ds, def);
+      for (let i = 0; i < def.devSize;  i++) out.push(src[pos++]);
+      continue;
+    }
+
+    const hasDev = !!(hdr & 0x20);
+    const isDef  = !!(hdr & 0x40);
+    const lt     = hdr & 0x0F;
+    out.push(hdr);
+
+    if (isDef) {
+      // ── Definition message ──
+      out.push(src[pos++]);                                  // reserved
+      const bigEndian = src[pos] !== 0;
+      out.push(src[pos++]);                                  // architecture
+      const gn = bigEndian
+        ? ((src[pos] << 8) | src[pos+1])
+        : (src[pos] | (src[pos+1] << 8));
+      out.push(src[pos++], src[pos++]);                      // global msg num
+      const nFields = src[pos++];
+
+      const fields = []; let dataSize = 0;
+      for (let i = 0; i < nFields; i++) {
+        fields.push({ fnum: src[pos], fsz: src[pos+1], ftyp: src[pos+2] });
+        dataSize += src[pos+1]; pos += 3;
+      }
+
+      const devFields = []; let devSize = 0;
+      if (hasDev) {
+        const nd = src[pos++];
+        for (let i = 0; i < nd; i++) {
+          devFields.push({ fnum: src[pos], fsz: src[pos+1], devIdx: src[pos+2] });
+          devSize += src[pos+1]; pos += 3;
+        }
+      }
+
+      const powerAdded = gn === 20 && !fields.some(f => f.fnum === 7);
+      defs[lt] = { global: gn, fields, devFields, dataSize, devSize, bigEndian, powerAdded };
+
+      // Write (possibly extended) field count then field defs
+      out.push(powerAdded ? nFields + 1 : nFields);
+      for (const f of fields) out.push(f.fnum, f.fsz, f.ftyp);
+      if (powerAdded) out.push(7, 2, 0x84);                 // power: uint16, no scale
+
+      if (hasDev) {
+        out.push(devFields.length);
+        for (const df of devFields) out.push(df.fnum, df.fsz, df.devIdx);
+      }
+
+    } else {
+      // ── Data message ──
+      const def = defs[lt];
+      if (!def) break;
+      const ds = pos;
+      for (let i = 0; i < def.dataSize; i++) out.push(src[pos++]);
+      if (def.global === 20 && def.powerAdded) pushPower(ds, def);
+      for (let i = 0; i < def.devSize;  i++) out.push(src[pos++]);
+    }
+  }
+
+  // ── Fix header: data size + header CRC ──
+  const newDataSize = out.length - headerSize;
+  out[4] = newDataSize         & 0xFF;
+  out[5] = (newDataSize >>  8) & 0xFF;
+  out[6] = (newDataSize >> 16) & 0xFF;
+  out[7] = (newDataSize >> 24) & 0xFF;
+
+  const outBytes = new Uint8Array(out);
+  if (headerSize >= 14) {
+    const hcrc = fitCRC(outBytes, 0, headerSize - 2);
+    outBytes[12] = hcrc & 0xFF;
+    outBytes[13] = (hcrc >> 8) & 0xFF;
+  }
+
+  // ── Append file CRC ──
+  const fcrc  = fitCRC(outBytes, 0, outBytes.length);
+  const final = new Uint8Array(outBytes.length + 2);
+  final.set(outBytes);
+  final[outBytes.length]     = fcrc & 0xFF;
+  final[outBytes.length + 1] = (fcrc >> 8) & 0xFF;
+  return final.buffer;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getParams(prefix) {
   return {
@@ -1517,8 +1682,12 @@ async function handleFile(file) {
     if (isGPX) {
       const text = await readFileAs(file, 'text');
       points = parseGPX(text);
+      originalFITBuf  = null;
+      originalFITName = '';
     } else {
       const buffer = await readFileAs(file, 'binary');
+      originalFITBuf  = buffer;
+      originalFITName = file.name;
       points = await parseFIT(buffer);
     }
 
@@ -1533,6 +1702,7 @@ async function handleFile(file) {
     document.getElementById('wind-controls').style.display = hasTime ? 'flex' : 'none';
     setWindBadge('', false);
     document.getElementById('fetch-wind-btn').disabled = false;
+    document.getElementById('export-fit-btn').style.display = isFIT ? 'inline-flex' : 'none';
 
     showResults(file.name, rideData);
   } catch(err) {
@@ -1570,10 +1740,13 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   document.getElementById('upload-section').style.display = 'flex';
   document.getElementById('results-section').style.display = 'none';
   document.getElementById('file-input').value = '';
-  gpxPoints = [];
-  windComponents = null;
-  rideData = null;
+  gpxPoints       = [];
+  windComponents  = null;
+  rideData        = null;
+  originalFITBuf  = null;
+  originalFITName = '';
   setWindBadge('', false);
+  document.getElementById('export-fit-btn').style.display = 'none';
 });
 
 document.getElementById('recalc-btn').addEventListener('click', () => {
@@ -1618,6 +1791,22 @@ document.getElementById('fetch-wind-btn').addEventListener('click', async () => 
     btn.disabled = false;
   } finally {
     showLoading(false);
+  }
+});
+
+document.getElementById('export-fit-btn').addEventListener('click', () => {
+  if (!originalFITBuf || !rideData) return;
+  try {
+    const outBuf  = buildFITWithPower(originalFITBuf, rideData.power);
+    const blob    = new Blob([outBuf], { type: 'application/octet-stream' });
+    const url     = URL.createObjectURL(blob);
+    const a       = document.createElement('a');
+    a.href        = url;
+    a.download    = originalFITName.replace(/\.fit$/i, '_power.fit');
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(err) {
+    showError('Export failed: ' + err.message);
   }
 });
 
