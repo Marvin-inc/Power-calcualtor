@@ -12,7 +12,7 @@ A fully client-side web app that estimates **cycling power output** from a GPX o
 |---|---|
 | **File formats** | `.gpx` (drag-and-drop or browse) and `.fit` (Garmin, COROS, Wahoo, Polar, …) |
 | **Physics model** | Gravity + rolling resistance + aerodynamic drag, all configurable |
-| **Wind integration** | Fetches real historical wind from [Open-Meteo](https://open-meteo.com/) and applies a bearing-adjusted headwind/tailwind component |
+| **Wind & weather integration** | Fetches real historical wind, temperature, humidity and pressure from [Open-Meteo](https://open-meteo.com/); applies a bearing-adjusted headwind/tailwind component and computes per-point air density |
 | **Power smoothing** | Centred time-aware rolling average (default 15 s, adjustable) |
 | **Charts** | Power + elevation profile, speed, grade, wind component, power breakdown doughnut |
 | **Power zones** | Z1–Z6 time-in-zone distribution relative to average power |
@@ -58,7 +58,9 @@ P = (F_gravity + F_rolling + F_aero + F_kinetic) × v_ground / η
 - **grade** = Δelevation / Δdistance
 - **a** = acceleration (m/s²)
 
-Wind is fetched per-point at hourly resolution and linearly interpolated to each GPS timestamp. A positive `v_eff` component means headwind (more drag); negative means tailwind (less drag).
+Wind, temperature, humidity and MSL pressure are fetched per-point at hourly resolution and linearly interpolated to each GPS timestamp. A positive `v_eff` component means headwind (more drag); negative means tailwind (less drag).
+
+Air density is computed from the fetched temperature, humidity and pressure (corrected to the rider's actual elevation via the barometric formula), so a hot, humid mountain ride sees ρ ≈ 0.95 kg/m³ instead of the default 1.225. The static ρ input is used only as a fallback when weather has not been fetched.
 
 The kinetic-energy term redistributes power into surges and out of coasting, so the model matches real power-meter traces on variable-pace rides. It integrates to ≈ 0 over a closed loop and does not change average power.
 
@@ -88,7 +90,7 @@ NP = (mean(rolling_30s_avg⁴))^(1/4)
 | Bike weight | 8 kg | Complete bike mass |
 | CdA | 0.32 m² | Aerodynamic drag area |
 | Crr | 0.004 | Rolling resistance coefficient |
-| Air density (ρ) | 1.225 kg/m³ | Lower at altitude / high temperature |
+| Air density (ρ) | 1.225 kg/m³ | Fallback; overridden by fetched weather (computed from T, RH, P and rider elevation) |
 | Drivetrain loss | 2 % | Mechanical efficiency loss |
 | Power smoothing | 15 s | Rolling-average window; 0 = raw |
 

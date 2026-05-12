@@ -621,7 +621,7 @@
       <button class="btn btn-primary recalc-btn" id="recalc-btn">&#9889; Recalculate</button>
       <!-- Wind fetch — only shown when GPX has timestamps -->
       <div id="wind-controls" style="display:none;align-items:flex-end;gap:8px;flex-wrap:wrap">
-        <button class="btn btn-wind" id="fetch-wind-btn">&#127788; Fetch Wind Data</button>
+        <button class="btn btn-wind" id="fetch-wind-btn">&#127788; Fetch Wind &amp; Weather</button>
         <span id="wind-badge" style="display:none" class="wind-badge"></span>
       </div>
     </div>
@@ -721,7 +721,7 @@
 <script>
 // ─── State ───────────────────────────────────────────────────────────────────
 let gpxPoints        = [];    // raw parsed points
-let windComponents   = null;  // per-point headwind (m/s)
+let weatherData      = null;  // { wind: m/s headwind, rho: kg/m³ } per point
 let rideData         = null;
 let originalFITBuf   = null;  // ArrayBuffer of uploaded FIT, for power export
 let originalFITName  = '';
@@ -953,8 +953,30 @@ function smoothByTime(arr, cumTimeSec, windowSec) {
   return out;
 }
 
-// ─── Open-Meteo wind fetch ────────────────────────────────────────────────────
-// Returns per-point headwind components (m/s). Positive = headwind, negative = tailwind.
+// ─── Air density from temperature, pressure, humidity ─────────────────────────
+// Returns kg/m³.
+//   T_c          °C
+//   P_msl        Pa (sea-level pressure)
+//   rh           % relative humidity
+//   h            m  rider elevation
+function airDensity(T_c, P_msl, rh, h) {
+  const T   = T_c + 273.15;                           // K
+  const g   = 9.80665, M = 0.0289644, R = 8.31447;
+  // Barometric formula (isothermal layer) to take pressure from MSL to rider elevation
+  const P   = P_msl * Math.exp(-g * M * h / (R * T));
+  // Tetens saturation vapour pressure (over water), Pa
+  const Psat = 610.78 * Math.exp(17.27 * T_c / (T_c + 237.3));
+  const Pv  = Math.max(0, Math.min(1, rh / 100)) * Psat;
+  const Pd  = P - Pv;
+  const Rd  = 287.058, Rv = 461.495;
+  return Pd / (Rd * T) + Pv / (Rv * T);
+}
+
+// ─── Open-Meteo wind + weather fetch ──────────────────────────────────────────
+// Returns { wind, rho }:
+//   wind[i] = headwind component at point i (m/s; positive = headwind)
+//   rho[i]  = air density at point i (kg/m³), computed from temperature,
+//             humidity, MSL pressure and rider elevation.
 async function fetchWindData(points) {
   const hasTime = points.every(p => p.time instanceof Date && !isNaN(p.time));
   if (!hasTime) throw new Error('GPX file has no timestamps — cannot look up historical wind');
@@ -976,28 +998,46 @@ async function fetchWindData(points) {
   const twoDaysAgo = Date.now() - 2 * 86400 * 1000;
   const useArchive = startTime.getTime() < twoDaysAgo;
 
+  const hourlyVars = 'wind_speed_10m,wind_direction_10m,temperature_2m,relative_humidity_2m,pressure_msl';
   let url;
   if (useArchive) {
     url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}`
         + `&start_date=${startDate}&end_date=${endDate}`
-        + `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&timezone=UTC`;
+        + `&hourly=${hourlyVars}&wind_speed_unit=ms&timezone=UTC`;
   } else {
     url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
         + `&start_date=${startDate}&end_date=${endDate}`
-        + `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&timezone=UTC`;
+        + `&hourly=${hourlyVars}&wind_speed_unit=ms&timezone=UTC`;
   }
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Open-Meteo API error: ${res.status}`);
   const data = await res.json();
 
-  if (!data.hourly) throw new Error('No hourly wind data in API response');
+  if (!data.hourly) throw new Error('No hourly weather data in API response');
 
   const hourlyTimes  = data.hourly.time.map(t => new Date(t + ':00Z').getTime());
   const hourlySpeed  = data.hourly.wind_speed_10m;
   const hourlyDir    = data.hourly.wind_direction_10m;
+  const hourlyTemp   = data.hourly.temperature_2m;
+  const hourlyRH     = data.hourly.relative_humidity_2m;
+  const hourlyPmsl   = data.hourly.pressure_msl;                // hPa
 
-  // Linear interpolation of hourly wind to each GPS point's timestamp
+  // Generic linear interpolator for a scalar hourly series
+  function interpScalar(series, ts) {
+    if (!series || !series.length) return null;
+    if (ts <= hourlyTimes[0])                       return series[0];
+    if (ts >= hourlyTimes[hourlyTimes.length - 1])  return series[series.length - 1];
+    let lo = 0, hi = hourlyTimes.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (hourlyTimes[mid] <= ts) lo = mid; else hi = mid;
+    }
+    const t = (ts - hourlyTimes[lo]) / (hourlyTimes[hi] - hourlyTimes[lo]);
+    return series[lo] + t * (series[hi] - series[lo]);
+  }
+
+  // Wind interpolator (special-case for circular direction)
   function interpolateWind(ts) {
     if (hourlyTimes.length === 0) return { speed: 0, dir: 0 };
     if (ts <= hourlyTimes[0])
@@ -1005,18 +1045,14 @@ async function fetchWindData(points) {
     if (ts >= hourlyTimes[hourlyTimes.length - 1])
       return { speed: hourlySpeed[hourlyTimes.length-1], dir: hourlyDir[hourlyTimes.length-1] };
 
-    // Binary search for surrounding hours
     let lo = 0, hi = hourlyTimes.length - 1;
     while (hi - lo > 1) {
       const mid = (lo + hi) >> 1;
       if (hourlyTimes[mid] <= ts) lo = mid; else hi = mid;
     }
     const t = (ts - hourlyTimes[lo]) / (hourlyTimes[hi] - hourlyTimes[lo]);
-
-    // Interpolate speed linearly
     const speed = hourlySpeed[lo] + t * (hourlySpeed[hi] - hourlySpeed[lo]);
 
-    // Interpolate direction via circular mean (handle 0/360 wrap)
     const d0 = hourlyDir[lo]  * Math.PI / 180;
     const d1 = hourlyDir[hi]  * Math.PI / 180;
     const sinAvg = Math.sin(d0) * (1-t) + Math.sin(d1) * t;
@@ -1026,24 +1062,32 @@ async function fetchWindData(points) {
     return { speed, dir };
   }
 
-  // Build per-point bearing array (forward difference, same bearing for point 0)
+  // Per-point bearing
   const bearings = points.map((p, i) => {
     if (i < points.length - 1) return bearingDeg(p, points[i+1]);
-    return bearingDeg(points[i-1], p); // last point reuses previous bearing
+    return bearingDeg(points[i-1], p);
   });
 
-  // Headwind component for each point
-  // wind_direction = where wind comes FROM (meteorological convention)
-  // headwind_component = wind_speed * cos(wind_from - travel_bearing)
-  // positive → headwind (rider faces the wind), negative → tailwind
-  const components = points.map((p, i) => {
-    const ts = p.time.getTime();
+  const wind = [];
+  const rho  = [];
+  for (let i = 0; i < points.length; i++) {
+    const ts = points[i].time.getTime();
     const { speed, dir } = interpolateWind(ts);
     const angleDiff = (dir - bearings[i]) * Math.PI / 180;
-    return speed * Math.cos(angleDiff);
-  });
+    wind.push(speed * Math.cos(angleDiff));
 
-  return components;
+    const T = interpScalar(hourlyTemp, ts);
+    const R = interpScalar(hourlyRH,   ts);
+    const P = interpScalar(hourlyPmsl, ts);
+    const h = (points[i].ele !== null && !isNaN(points[i].ele)) ? points[i].ele : 0;
+    if (T !== null && R !== null && P !== null) {
+      rho.push(airDensity(T, P * 100, R, h));    // P_msl in Pa
+    } else {
+      rho.push(null);
+    }
+  }
+
+  return { wind, rho };
 }
 
 // ─── Normalised Power ─────────────────────────────────────────────────────────
@@ -1061,8 +1105,11 @@ function normalisedPower(powers) {
 }
 
 // ─── Process ride ─────────────────────────────────────────────────────────────
-// windComps: optional array of per-point headwind values (m/s), positive = headwind
-function processRide(points, rawParams, windComps) {
+function processRide(points, rawParams, weather) {
+  // `weather` can be:
+  //   null            — no fetched data; use static params.rho and zero wind
+  //   { wind, rho }   — per-point arrays from fetchWindData (rho entries may be
+  //                     null when the API didn't return weather for that hour)
   const params = {
     mass:   rawParams.rider + rawParams.bike,
     cda:    rawParams.cda,
@@ -1080,7 +1127,8 @@ function processRide(points, rawParams, windComps) {
   const Pr    = [];
   const Pa    = [];
   const Pk    = [];
-  const wind  = windComps || new Array(n).fill(0);
+  const wind   = (weather && weather.wind) || new Array(n).fill(0);
+  const rhoArr = (weather && weather.rho)  || new Array(n).fill(null);
 
   // First pass: cumulative distances
   for (let i = 1; i < n; i++) {
@@ -1172,7 +1220,9 @@ function processRide(points, rawParams, windComps) {
     const g      = smoothGrade[i];
     const w      = wind[i] || 0;          // headwind (m/s), positive = into rider
     const a      = accel[i] || 0;
-    const { mass, cda, crr, rho, eff } = params;
+    const { mass, cda, crr, eff } = params;
+    // Per-point air density from fetched weather; fall back to user-set ρ.
+    const rho    = (rhoArr[i] !== null && !isNaN(rhoArr[i])) ? rhoArr[i] : params.rho;
 
     const theta  = Math.atan(g);
     const fGrav  = mass * 9.8067 * Math.sin(theta);
@@ -1241,7 +1291,12 @@ function processRide(points, rawParams, windComps) {
     work:     work / 1000,
     hasEle,
     hasTime,
-    hasWind:  !!windComps,
+    hasWind:  !!(weather && weather.wind),
+    hasRho:   !!(weather && weather.rho && weather.rho.some(v => v !== null)),
+    avgRho:   (() => {
+      const valid = rhoArr.filter(v => v !== null && !isNaN(v));
+      return valid.length ? avg(valid) : params.rho;
+    })(),
   };
 }
 
@@ -1725,7 +1780,7 @@ async function handleFile(file) {
     }
 
     gpxPoints      = points;
-    windComponents = null;
+    weatherData = null;
 
     const params = getParams('p');
     syncParams('p', 'r');
@@ -1774,7 +1829,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   document.getElementById('results-section').style.display = 'none';
   document.getElementById('file-input').value = '';
   gpxPoints       = [];
-  windComponents  = null;
+  weatherData  = null;
   rideData        = null;
   originalFITBuf  = null;
   originalFITName = '';
@@ -1788,7 +1843,7 @@ document.getElementById('recalc-btn').addEventListener('click', () => {
   setTimeout(() => {
     try {
       const params = getParams('r');
-      rideData = processRide(gpxPoints, params, windComponents);
+      rideData = processRide(gpxPoints, params, weatherData);
       renderStats(rideData);
       buildCharts(rideData);
       renderMap(rideData);
@@ -1804,16 +1859,17 @@ document.getElementById('fetch-wind-btn').addEventListener('click', async () => 
   if (!gpxPoints.length) return;
   const btn = document.getElementById('fetch-wind-btn');
   btn.disabled = true;
-  showLoading(true, 'Fetching wind data from Open-Meteo…');
+  showLoading(true, 'Fetching wind & weather data from Open-Meteo…');
   try {
-    windComponents = await fetchWindData(gpxPoints);
+    weatherData = await fetchWindData(gpxPoints);
 
     const params = getParams('r');
-    rideData = processRide(gpxPoints, params, windComponents);
+    rideData = processRide(gpxPoints, params, weatherData);
 
-    const avgHeadwind = avg(windComponents) * 3.6;
-    const dir = avgHeadwind >= 0 ? 'headwind' : 'tailwind';
-    setWindBadge(`✓ ${Math.abs(avgHeadwind).toFixed(1)} km/h avg ${dir}`, false);
+    const avgHeadwind = avg(weatherData.wind) * 3.6;
+    const dir         = avgHeadwind >= 0 ? 'headwind' : 'tailwind';
+    const rhoNote     = rideData.hasRho ? `, ρ ${rideData.avgRho.toFixed(3)} kg/m³` : '';
+    setWindBadge(`✓ ${Math.abs(avgHeadwind).toFixed(1)} km/h avg ${dir}${rhoNote}`, false);
 
     renderStats(rideData);
     buildCharts(rideData);
