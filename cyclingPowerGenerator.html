@@ -748,8 +748,9 @@ function parseGPX(text) {
     points.push({
       lat,
       lon,
-      ele:  eleEl  ? parseFloat(eleEl.textContent)  : null,
-      time: timeEl ? new Date(timeEl.textContent)    : null,
+      ele:   eleEl  ? parseFloat(eleEl.textContent) : null,
+      time:  timeEl ? new Date(timeEl.textContent)  : null,
+      speed: null,
     });
   });
 
@@ -841,7 +842,7 @@ function _decodeFIT(buffer) {
       const msgStart = pos;
 
       if (def.globalMsgNum === 20) {    // message 20 = "record" (GPS/sensor)
-        let lat = null, lon = null, ele = null, ts = null;
+        let lat = null, lon = null, ele = null, ts = null, spd = null;
         let fp  = msgStart;
 
         for (const f of def.fields) {
@@ -863,13 +864,19 @@ function _decodeFIT(buffer) {
               case 78:                                          // enhanced_altitude uint32
                 if (v !== 0xFFFFFFFF) ele = v / 5 - 500;      // overrides field 2
                 break;
+              case 6:                                           // speed uint16 (scale 1000, m/s)
+                if (v !== 0xFFFF) spd = v / 1000;
+                break;
+              case 73:                                          // enhanced_speed uint32
+                if (v !== 0xFFFFFFFF) spd = v / 1000;         // overrides field 6
+                break;
             }
           }
           fp += f.size;
         }
 
         if (lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-          recs.push({ lat, lon, ele, time: ts });
+          recs.push({ lat, lon, ele, time: ts, speed: spd });
         }
       }
 
@@ -1067,12 +1074,12 @@ function processRide(points, rawParams, windComps) {
 
   const n = points.length;
   const dist  = [0];
-  const speed = [];
   const grade = [];
   const power = [];
   const Pg    = [];
   const Pr    = [];
   const Pa    = [];
+  const Pk    = [];
   const wind  = windComps || new Array(n).fill(0);
 
   // First pass: cumulative distances
@@ -1081,13 +1088,26 @@ function processRide(points, rawParams, windComps) {
   }
 
   const hasTime = points.every(p => p.time instanceof Date && !isNaN(p.time));
+
+  // Cumulative elapsed time (seconds) per point — built early so elevation/speed
+  // smoothing can be time-aware.
+  const cumTime = [0];
+  for (let i = 1; i < n; i++) {
+    if (hasTime) {
+      cumTime.push((points[i].time - points[0].time) / 1000);
+    } else {
+      // assume 20 km/h until we know better; refined to dist-based later if needed
+      const dx = dist[i] - dist[i-1];
+      cumTime.push(cumTime[i-1] + dx / (20 / 3.6));
+    }
+  }
+
   // Consider elevation available if >50% of points have it; forward-fill the sparse nulls
   const eleCount = points.filter(p => p.ele !== null && !isNaN(p.ele)).length;
   const hasEle   = eleCount > n * 0.5;
-  const ele = (() => {
+  const eleRaw = (() => {
     if (!hasEle) return new Array(n).fill(null);
     const arr = points.map(p => (p.ele !== null && !isNaN(p.ele)) ? p.ele : null);
-    // forward-fill then backward-fill to cover leading nulls
     let last = arr.find(v => v !== null) ?? 0;
     for (let i = 0; i < n; i++) { if (arr[i] !== null) last = arr[i]; else arr[i] = last; }
     last = arr[n-1];
@@ -1095,7 +1115,11 @@ function processRide(points, rawParams, windComps) {
     return arr;
   })();
 
-  // Raw grade
+  // Smooth elevation BEFORE computing grade — GPS/baro altitude is noisy and
+  // grade is a derivative, so noise becomes false gravity power.
+  const ele = hasEle ? smoothByTime(eleRaw, cumTime, 10) : eleRaw;
+
+  // Grade from smoothed elevation
   const rawGrade = [0];
   for (let i = 1; i < n; i++) {
     const dx = dist[i] - dist[i-1];
@@ -1103,28 +1127,51 @@ function processRide(points, rawParams, windComps) {
     const dz = hasEle ? (ele[i] - ele[i-1]) : 0;
     rawGrade.push(dz / dx);
   }
-  const smoothGrade = smooth(rawGrade, 7);
+  const smoothGrade = smooth(rawGrade, 5);
 
-  // Speed per segment
-  for (let i = 0; i < n; i++) {
-    if (i === 0) { speed.push(0); continue; }
-    const dx = dist[i] - dist[i-1];
-    let dt;
-    if (hasTime) {
-      dt = (points[i].time - points[i-1].time) / 1000;
-      if (dt <= 0) dt = 1;
-    } else {
-      dt = dx / (20 / 3.6);
+  // Speed: use FIT speed channel when ≥50% of points report it (more accurate
+  // than GPS deltas — uses wheel-sensor / Kalman-fused values from the device).
+  const fitSpeedCount = points.filter(p => p.speed !== null && !isNaN(p.speed)).length;
+  const useFitSpeed   = fitSpeedCount > n * 0.5;
+  const rawSpeed = [];
+  if (useFitSpeed) {
+    let last = 0;
+    for (let i = 0; i < n; i++) {
+      const s = points[i].speed;
+      if (s !== null && !isNaN(s)) { last = s; rawSpeed.push(s); }
+      else rawSpeed.push(last);
     }
-    speed.push(dx / dt);
+  } else {
+    rawSpeed.push(0);
+    for (let i = 1; i < n; i++) {
+      const dx = dist[i] - dist[i-1];
+      let dt;
+      if (hasTime) {
+        dt = (points[i].time - points[i-1].time) / 1000;
+        if (dt <= 0) dt = 1;
+      } else {
+        dt = dx / (20 / 3.6);
+      }
+      rawSpeed.push(dx / dt);
+    }
   }
-  const smoothSpeed = smooth(speed, 5);
+  const smoothSpeed = smoothByTime(rawSpeed, cumTime, 3);
 
-  // Power with wind-adjusted aero drag
+  // Centred-difference acceleration (m/s²) for the kinetic-energy term.
+  // Smoothed to suppress GPS-derived speed noise from amplifying.
+  const rawAccel = new Array(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    const dt = cumTime[i+1] - cumTime[i-1];
+    if (dt > 0) rawAccel[i] = (smoothSpeed[i+1] - smoothSpeed[i-1]) / dt;
+  }
+  const accel = smoothByTime(rawAccel, cumTime, 5);
+
+  // Power with wind-adjusted aero drag + kinetic-energy term
   for (let i = 0; i < n; i++) {
     const v      = Math.max(0, smoothSpeed[i]);
     const g      = smoothGrade[i];
     const w      = wind[i] || 0;          // headwind (m/s), positive = into rider
+    const a      = accel[i] || 0;
     const { mass, cda, crr, rho, eff } = params;
 
     const theta  = Math.atan(g);
@@ -1133,28 +1180,22 @@ function processRide(points, rawParams, windComps) {
 
     // Effective airspeed: rider speed + headwind component
     const vEff   = v + w;
-    // Aero force sign follows relative air direction (can be negative = tailwind assist)
     const fAero  = 0.5 * rho * cda * vEff * Math.abs(vEff);
 
-    const f      = fGrav + fRoll + fAero;
+    // Kinetic-energy power: P_k = m·v·a (positive when accelerating, negative when
+    // decelerating). On a closed loop this term integrates to ~0, but it shifts
+    // power into surges and out of coasting, matching real power-meter traces.
+    const fKin   = mass * a;
+
+    const f      = fGrav + fRoll + fAero + fKin;
     const p      = Math.max(0, f * v / eff);
 
     power.push(p);
     Pg.push(Math.max(0, fGrav * v / eff));
     Pr.push(Math.max(0, fRoll * v / eff));
-    Pa.push(Math.max(0, (0.5 * rho * cda * vEff * Math.abs(vEff)) * v / eff));
+    Pa.push(Math.max(0, fAero * v / eff));
+    Pk.push(fKin * v / eff);                // can be negative
     grade.push(g * 100);
-  }
-
-  // Cumulative elapsed time (seconds) per point — used for 15 s power smoothing
-  const cumTime = [0];
-  for (let i = 1; i < n; i++) {
-    if (hasTime) {
-      cumTime.push((points[i].time - points[0].time) / 1000);
-    } else {
-      const dx = dist[i] - dist[i-1];
-      cumTime.push(cumTime[i-1] + dx / (smoothSpeed[i] || 5));
-    }
   }
 
   // Rolling average on power (window set by user, 0 = no smoothing)
@@ -1162,14 +1203,7 @@ function processRide(points, rawParams, windComps) {
   for (let i = 0; i < n; i++) power[i] = smoothedPower[i];
 
   // Duration
-  let durationSec = 0;
-  if (hasTime && n > 1) {
-    durationSec = (points[n-1].time - points[0].time) / 1000;
-  } else {
-    for (let i = 1; i < n; i++) {
-      durationSec += (dist[i] - dist[i-1]) / (smoothSpeed[i] || 5);
-    }
-  }
+  const durationSec = cumTime[n-1];
 
   // Elevation gain
   let elevGain = 0;
@@ -1183,9 +1217,7 @@ function processRide(points, rawParams, windComps) {
   // Total work (kJ)
   let work = 0;
   for (let i = 1; i < n; i++) {
-    const dx = dist[i] - dist[i-1];
-    const dt = dx / (smoothSpeed[i] || 1);
-    work += power[i] * dt;
+    work += power[i] * (cumTime[i] - cumTime[i-1]);
   }
 
   return {
@@ -1195,8 +1227,9 @@ function processRide(points, rawParams, windComps) {
     speed:    smoothSpeed,
     grade,
     power,
-    Pg, Pr, Pa,
+    Pg, Pr, Pa, Pk,
     wind:     wind.map(w => w * 3.6),   // store as km/h for display
+    usedFitSpeed: useFitSpeed,
     avgPower: avg(power),
     maxPower: Math.max(...power),
     np:       normalisedPower(power),

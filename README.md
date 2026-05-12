@@ -38,7 +38,7 @@ A fully client-side web app that estimates **cycling power output** from a GPX o
 Total power at the wheel:
 
 ```
-P = (F_gravity + F_rolling + F_aero) × v_ground / η
+P = (F_gravity + F_rolling + F_aero + F_kinetic) × v_ground / η
 ```
 
 | Component | Formula |
@@ -46,19 +46,29 @@ P = (F_gravity + F_rolling + F_aero) × v_ground / η
 | Gravity | `F_g = m·g·sin(arctan(grade))` |
 | Rolling resistance | `F_r = m·g·cos(arctan(grade))·Crr` |
 | Aerodynamic drag | `F_a = ½·ρ·CdA·v_eff·\|v_eff\|` |
+| Kinetic energy | `F_k = m·a` (a = dv/dt, central difference) |
 | Effective airspeed | `v_eff = v_ground + wind_speed·cos(wind_from − bearing)` |
 
-- **m** = rider weight + bike weight (kg)  
-- **g** = 9.8067 m/s²  
-- **Crr** = rolling resistance coefficient (typically 0.003–0.006)  
-- **CdA** = drag coefficient × frontal area (m²; typically 0.25–0.40 for road bikes)  
-- **ρ** = air density (kg/m³; 1.225 at sea level, 15 °C)  
-- **η** = drivetrain efficiency (1 − loss%)  
-- **grade** = Δelevation / Δdistance  
+- **m** = rider weight + bike weight (kg)
+- **g** = 9.8067 m/s²
+- **Crr** = rolling resistance coefficient (typically 0.003–0.006)
+- **CdA** = drag coefficient × frontal area (m²; typically 0.25–0.40 for road bikes)
+- **ρ** = air density (kg/m³; 1.225 at sea level, 15 °C)
+- **η** = drivetrain efficiency (1 − loss%)
+- **grade** = Δelevation / Δdistance
+- **a** = acceleration (m/s²)
 
 Wind is fetched per-point at hourly resolution and linearly interpolated to each GPS timestamp. A positive `v_eff` component means headwind (more drag); negative means tailwind (less drag).
 
-Power is then smoothed with a centred time-aware rolling average (default ±7.5 s window).
+The kinetic-energy term redistributes power into surges and out of coasting, so the model matches real power-meter traces on variable-pace rides. It integrates to ≈ 0 over a closed loop and does not change average power.
+
+### Inputs — accuracy-relevant choices
+
+- **Elevation is smoothed** (10 s centred window) before computing grade. GPS / barometric altitude is noisy, and grade is a derivative, so unsmoothed elevation produces spurious gravity-power spikes.
+- **Speed source**: when the input is a FIT file with a wheel / fused-speed channel (field 6 or `enhanced_speed` field 73), that speed is used directly. Otherwise speed is derived from GPS deltas and lightly smoothed.
+- **Acceleration** is computed by central difference on smoothed speed, then smoothed again to keep speed noise from amplifying through the kinetic term.
+
+Power is finally smoothed with a centred time-aware rolling average (default ±7.5 s window).
 
 ### Normalised Power
 
