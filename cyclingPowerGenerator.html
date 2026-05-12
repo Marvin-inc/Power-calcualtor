@@ -602,7 +602,7 @@
       <button onclick="document.getElementById('cda-modal-overlay').classList.remove('show')"
               style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:0 4px">&#10005;</button>
     </div>
-    <p class="modal-subtitle">Estimates frontal area from anthropometric measurements using five published equations, then multiplies by Cd to arrive at CdA. Typical uncertainty: ±0.016–0.019 m² (5–10%).</p>
+    <p class="modal-subtitle">Estimates rider frontal area from anthropometric data using five published equations, multiplies by a position-appropriate Cd, then adds the bike's drag area to arrive at total CdA.</p>
 
     <div class="cda-inputs-grid">
       <div class="param-group">
@@ -636,29 +636,51 @@
       <div class="param-group">
         <label>Torso Angle</label>
         <div class="input-wrap">
-          <input type="number" id="cda-ta" placeholder="12" step="1" min="2" max="45" />
+          <input type="number" id="cda-ta" placeholder="12" step="1" min="2" max="60" />
           <span class="unit">°</span>
         </div>
+      </div>
+      <div class="param-group">
+        <label>Position Preset</label>
+        <select id="cda-preset" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 10px;color:var(--text);font-size:14px">
+          <option value="custom">— custom —</option>
+          <option value="tt-aero">TT / aero tuck</option>
+          <option value="tt"      selected>Time trial</option>
+          <option value="drops">Road, drops</option>
+          <option value="hoods">Road, hoods</option>
+          <option value="upright">Upright / touring</option>
+        </select>
       </div>
     </div>
 
     <div style="font-size:11px;color:var(--muted);margin-top:-10px;margin-bottom:16px">
-      STA = seat tube angle from horizontal &nbsp;·&nbsp; TA = torso angle from horizontal (aero position: 5–15°, road: 25–40°) &nbsp;·&nbsp; SW = biacromial width
+      STA = seat tube angle from horizontal &nbsp;·&nbsp; TA = torso angle from horizontal &nbsp;·&nbsp; SW = biacromial (shoulder) width. Choosing a preset fills STA / TA and sets a position-typical Cd.
     </div>
 
-    <div class="cda-cd-row">
-      <span style="font-size:12px;color:var(--muted);margin-right:4px">Cd model:</span>
-      <label><input type="radio" name="cd-mode" value="kyle" checked /> Kyle fixed &nbsp;<strong>0.707</strong>&nbsp; <span style="color:var(--muted)">(recommended)</span></label>
-      <label><input type="radio" name="cd-mode" value="heil" /> Heil mass-based &nbsp;<strong id="cd-heil-val">—</strong></label>
+    <div class="cda-cd-row" style="gap:16px">
+      <div class="param-group" style="flex:0 0 auto;min-width:120px">
+        <label>Cd (drag coefficient)</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-cd" value="0.70" step="0.01" min="0.55" max="1.20" />
+        </div>
+      </div>
+      <div class="param-group" style="flex:0 0 auto;min-width:160px">
+        <label>Bike + Accessories CdA</label>
+        <div class="input-wrap">
+          <input type="number" id="cda-bike" value="0.04" step="0.005" min="0" max="0.15" />
+          <span class="unit">m²</span>
+        </div>
+      </div>
     </div>
 
     <table id="cda-results-table">
       <thead>
         <tr>
           <th>Source</th>
-          <th>A (m²)</th>
-          <th>Cd</th>
-          <th>CdA (m²)</th>
+          <th>Rider A</th>
+          <th>Rider CdA</th>
+          <th>+ Bike</th>
+          <th>Total CdA</th>
           <th></th>
         </tr>
       </thead>
@@ -666,7 +688,8 @@
     </table>
 
     <div style="font-size:11px;color:var(--muted);line-height:1.6">
-      Sources: AIS (Sam Callan / USA Cycling) · Bassett et al., Med Sci Sports Exerc 1999 · Heil, Eur J Appl Physiol 2001 · Cd reference: Kyle, Cycling Science 1991
+      Notes: Heil's equations were fit on TT cyclists (TA 5–25°) so they under-respond to large TA values — for upright positions the Cd is the dominant adjustment. Typical uncertainty ±0.016–0.019 m² rider CdA. Bike CdA: ~0.025–0.035 (TT bike, deep wheels), ~0.04 (road), ~0.05–0.06 (gravel/MTB/touring).<br>
+      Sources: AIS (Sam Callan / USA Cycling) · Bassett et al., Med Sci Sports Exerc 1999 · Heil, Eur J Appl Physiol 2001 · Cd reference: Kyle, Cycling Science 1991 · Wilson, Bicycling Science (3rd ed.) for bike CdA.
     </div>
   </div>
 </div>
@@ -1349,70 +1372,83 @@ const CDA_FORMULAS = [
   },
 ];
 
-function getCdMode() {
-  return document.querySelector('input[name="cd-mode"]:checked').value;
-}
+// Position presets: STA / TA from typical bike fits, Cd derived from
+// published wind-tunnel CdA values (Kyle 1991, Defraeye 2010, Garcia-Lopez 2008)
+// divided by typical frontal areas to recover Cd alone, and bike-only CdA
+// from Wilson, Bicycling Science (3rd ed.).
+const CDA_PRESETS = {
+  'tt-aero': { sta: 78, ta: 8,  cd: 0.65, bike: 0.030 },
+  'tt':      { sta: 76, ta: 12, cd: 0.70, bike: 0.035 },
+  'drops':   { sta: 73, ta: 25, cd: 0.82, bike: 0.040 },
+  'hoods':   { sta: 73, ta: 40, cd: 0.92, bike: 0.045 },
+  'upright': { sta: 73, ta: 55, cd: 1.05, bike: 0.055 },
+};
 
-function getCdValue(mass) {
-  return getCdMode() === 'heil' ? 4.45 * Math.pow(mass, -0.45) : 0.707;
+function applyPreset(name) {
+  const p = CDA_PRESETS[name];
+  if (!p) return;
+  document.getElementById('cda-sta').value  = p.sta;
+  document.getElementById('cda-ta').value   = p.ta;
+  document.getElementById('cda-cd').value   = p.cd;
+  document.getElementById('cda-bike').value = p.bike;
+  renderCdATable();
 }
 
 function getCdAInputs() {
   return {
-    h:   parseFloat(document.getElementById('cda-height').value) || null,
-    m:   parseFloat(document.getElementById('cda-mass').value)   || null,
-    sta: parseFloat(document.getElementById('cda-sta').value)    || null,
-    ta:  parseFloat(document.getElementById('cda-ta').value)     || null,
-    sw:  parseFloat(document.getElementById('cda-sw').value)     || null,
+    h:    parseFloat(document.getElementById('cda-height').value) || null,
+    m:    parseFloat(document.getElementById('cda-mass').value)   || null,
+    sta:  parseFloat(document.getElementById('cda-sta').value)    || null,
+    ta:   parseFloat(document.getElementById('cda-ta').value)     || null,
+    sw:   parseFloat(document.getElementById('cda-sw').value)     || null,
+    cd:   parseFloat(document.getElementById('cda-cd').value)     || 0.707,
+    bike: parseFloat(document.getElementById('cda-bike').value)   || 0,
   };
 }
 
 function renderCdATable() {
   const inp  = getCdAInputs();
-  const mass = inp.m;
-  const cd   = mass ? getCdValue(mass) : null;
-
-  document.getElementById('cd-heil-val').textContent =
-    mass ? (4.45 * Math.pow(mass, -0.45)).toFixed(3) : '—';
+  const cd   = inp.cd;
+  const bike = inp.bike;
 
   const tbody = document.getElementById('cda-tbody');
   tbody.innerHTML = '';
 
-  const cdas = [];
+  const totals = [];
 
   CDA_FORMULAS.forEach(f => {
     const complete = f.needs.every(k => inp[k] !== null && !isNaN(inp[k]) && inp[k] > 0);
     const tr = document.createElement('tr');
     if (!complete) tr.className = 'incomplete';
 
-    let aVal = null, cdaVal = null;
+    let aVal = null, riderCdA = null, totalCdA = null;
     if (complete) {
-      aVal   = f.fn(inp);
-      cdaVal = aVal * (cd ?? 0.707);
-      cdas.push(cdaVal);
+      aVal     = f.fn(inp);
+      riderCdA = aVal * cd;
+      totalCdA = riderCdA + bike;
+      totals.push(totalCdA);
     }
 
     tr.innerHTML = `
       <td>${f.label}<br><span style="font-size:10px;color:var(--muted)">S.E.E. ±${f.see} m²</span></td>
-      <td>${aVal   !== null ? aVal.toFixed(4)   : '—'}</td>
-      <td>${cd     !== null ? cd.toFixed(3)      : '—'}</td>
-      <td style="font-weight:600">${cdaVal !== null ? cdaVal.toFixed(4) : '—'}</td>
-      <td><button class="apply-cda-btn" ${cdaVal === null ? 'disabled' : ''}
-            onclick="applyCdA(${cdaVal !== null ? cdaVal.toFixed(4) : 0})">Apply</button></td>
+      <td>${aVal     !== null ? aVal.toFixed(3)     : '—'}</td>
+      <td>${riderCdA !== null ? riderCdA.toFixed(3) : '—'}</td>
+      <td>${bike.toFixed(3)}</td>
+      <td style="font-weight:600">${totalCdA !== null ? totalCdA.toFixed(3) : '—'}</td>
+      <td><button class="apply-cda-btn" ${totalCdA === null ? 'disabled' : ''}
+            onclick="applyCdA(${totalCdA !== null ? totalCdA.toFixed(4) : 0})">Apply</button></td>
     `;
     tbody.appendChild(tr);
   });
 
-  // Mean row
-  if (cdas.length > 0) {
-    const mean = cdas.reduce((a,b) => a+b, 0) / cdas.length;
+  if (totals.length > 0) {
+    const mean = totals.reduce((a,b) => a+b, 0) / totals.length;
     const tr = document.createElement('tr');
     tr.className = 'mean-row';
     tr.innerHTML = `
-      <td>Mean of ${cdas.length} estimate${cdas.length>1?'s':''}</td>
-      <td></td>
-      <td></td>
-      <td>${mean.toFixed(4)}</td>
+      <td>Mean of ${totals.length} estimate${totals.length>1?'s':''}</td>
+      <td></td><td></td><td></td>
+      <td>${mean.toFixed(3)}</td>
       <td><button class="apply-cda-btn" onclick="applyCdA(${mean.toFixed(4)})">Apply</button></td>
     `;
     tbody.appendChild(tr);
@@ -1427,28 +1463,37 @@ function applyCdA(val) {
 }
 
 function openCdAEstimator() {
-  // Pre-populate mass from rider params if set
   const massEl = document.getElementById('cda-mass');
   if (!massEl.value) {
     const riderEl = document.getElementById('p-rider') || document.getElementById('r-rider');
     if (riderEl && riderEl.value) massEl.value = riderEl.value;
   }
+  // Apply current preset (fills STA/TA/Cd/bike) unless user already changed things
+  const presetEl = document.getElementById('cda-preset');
+  if (presetEl.value !== 'custom' && !document.getElementById('cda-sta').value) {
+    applyPreset(presetEl.value);
+  }
   renderCdATable();
   document.getElementById('cda-modal-overlay').classList.add('show');
 }
 
-// Close on overlay click
 document.getElementById('cda-modal-overlay').addEventListener('click', e => {
   if (e.target === document.getElementById('cda-modal-overlay'))
     document.getElementById('cda-modal-overlay').classList.remove('show');
 });
 
-// Live-update table when inputs change
-['cda-height','cda-mass','cda-sta','cda-ta','cda-sw'].forEach(id => {
+// Manual edits to STA/TA/Cd/bike switch the preset to "custom"
+['cda-sta','cda-ta','cda-cd','cda-bike'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    document.getElementById('cda-preset').value = 'custom';
+    renderCdATable();
+  });
+});
+['cda-height','cda-mass','cda-sw'].forEach(id => {
   document.getElementById(id).addEventListener('input', renderCdATable);
 });
-document.querySelectorAll('input[name="cd-mode"]').forEach(r => {
-  r.addEventListener('change', renderCdATable);
+document.getElementById('cda-preset').addEventListener('change', e => {
+  if (e.target.value !== 'custom') applyPreset(e.target.value);
 });
 
 // ─── Process ride ─────────────────────────────────────────────────────────────
