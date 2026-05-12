@@ -530,6 +530,13 @@
           <span class="unit">%</span>
         </div>
       </div>
+      <div class="param-group">
+        <label>Power Smoothing</label>
+        <div class="input-wrap">
+          <input type="number" id="p-smooth" value="15" step="1" min="0" max="300" />
+          <span class="unit">s</span>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -592,6 +599,13 @@
         <div class="input-wrap">
           <input type="number" id="r-loss" value="2" step="0.5" min="0" max="10" />
           <span class="unit">%</span>
+        </div>
+      </div>
+      <div class="param-group">
+        <label>Power Smoothing</label>
+        <div class="input-wrap">
+          <input type="number" id="r-smooth" value="15" step="1" min="0" max="300" />
+          <span class="unit">s</span>
         </div>
       </div>
       <button class="btn btn-primary recalc-btn" id="recalc-btn">&#9889; Recalculate</button>
@@ -1031,11 +1045,12 @@ function normalisedPower(powers) {
 // windComps: optional array of per-point headwind values (m/s), positive = headwind
 function processRide(points, rawParams, windComps) {
   const params = {
-    mass: rawParams.rider + rawParams.bike,
-    cda:  rawParams.cda,
-    crr:  rawParams.crr,
-    rho:  rawParams.rho,
-    eff:  1 - rawParams.loss / 100,
+    mass:   rawParams.rider + rawParams.bike,
+    cda:    rawParams.cda,
+    crr:    rawParams.crr,
+    rho:    rawParams.rho,
+    eff:    1 - rawParams.loss / 100,
+    smooth: rawParams.smooth ?? 15,
   };
 
   const n = points.length;
@@ -1130,8 +1145,8 @@ function processRide(points, rawParams, windComps) {
     }
   }
 
-  // 15-second rolling average on power
-  const smoothedPower = smoothByTime(power, cumTime, 15);
+  // Rolling average on power (window set by user, 0 = no smoothing)
+  const smoothedPower = params.smooth > 0 ? smoothByTime(power, cumTime, params.smooth) : power.slice();
   for (let i = 0; i < n; i++) power[i] = smoothedPower[i];
 
   // Duration
@@ -1443,17 +1458,18 @@ function renderMap(d) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getParams(prefix) {
   return {
-    rider: parseFloat(document.getElementById(`${prefix}-rider`).value) || 75,
-    bike:  parseFloat(document.getElementById(`${prefix}-bike`).value)  || 8,
-    cda:   parseFloat(document.getElementById(`${prefix}-cda`).value)   || 0.32,
-    crr:   parseFloat(document.getElementById(`${prefix}-crr`).value)   || 0.004,
-    rho:   parseFloat(document.getElementById(`${prefix}-rho`).value)   || 1.225,
-    loss:  parseFloat(document.getElementById(`${prefix}-loss`).value)  || 2,
+    rider:  parseFloat(document.getElementById(`${prefix}-rider`).value)  || 75,
+    bike:   parseFloat(document.getElementById(`${prefix}-bike`).value)   || 8,
+    cda:    parseFloat(document.getElementById(`${prefix}-cda`).value)    || 0.32,
+    crr:    parseFloat(document.getElementById(`${prefix}-crr`).value)    || 0.004,
+    rho:    parseFloat(document.getElementById(`${prefix}-rho`).value)    || 1.225,
+    loss:   parseFloat(document.getElementById(`${prefix}-loss`).value)   || 2,
+    smooth: Math.max(0, parseFloat(document.getElementById(`${prefix}-smooth`).value) || 15),
   };
 }
 
 function syncParams(from, to) {
-  ['rider','bike','cda','crr','rho','loss'].forEach(k => {
+  ['rider','bike','cda','crr','rho','loss','smooth'].forEach(k => {
     document.getElementById(`${to}-${k}`).value = document.getElementById(`${from}-${k}`).value;
   });
 }
