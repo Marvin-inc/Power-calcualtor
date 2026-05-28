@@ -980,6 +980,8 @@ function parseGPX(text) {
       ele:   eleEl  ? parseFloat(eleEl.textContent) : null,
       time:  timeEl ? new Date(timeEl.textContent)  : null,
       speed: null,
+      cad:   null,
+      pwr:   null,
     });
   });
 
@@ -1071,7 +1073,7 @@ function _decodeFIT(buffer) {
       const msgStart = pos;
 
       if (def.globalMsgNum === 20) {    // message 20 = "record" (GPS/sensor)
-        let lat = null, lon = null, ele = null, ts = null, spd = null;
+        let lat = null, lon = null, ele = null, ts = null, spd = null, cad = null, pwr = null;
         let fp  = msgStart;
 
         for (const f of def.fields) {
@@ -1099,13 +1101,19 @@ function _decodeFIT(buffer) {
               case 73:                                          // enhanced_speed uint32
                 if (v !== 0xFFFFFFFF) spd = v / 1000;         // overrides field 6
                 break;
+              case 4:                                           // cadence uint8 (rpm)
+                if (v !== 0xFF) cad = v;
+                break;
+              case 7:                                           // power uint16 (watts)
+                if (v !== 0xFFFF) pwr = v;
+                break;
             }
           }
           fp += f.size;
         }
 
         if (lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-          recs.push({ lat, lon, ele, time: ts, speed: spd });
+          recs.push({ lat, lon, ele, time: ts, speed: spd, cad, pwr });
         }
       }
 
