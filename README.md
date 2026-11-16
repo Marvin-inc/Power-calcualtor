@@ -151,9 +151,10 @@ While you coast, your power is exactly zero, so the rate at which you slow down 
 
 1. Pick a straight, sheltered road, flat or with a steady gentle slope, on a calm dry day.
 2. Get up to about 40 km/h, stop pedalling, hold your normal position and coast down to about 15 km/h without braking.
-3. Make a U-turn and coast over the same stretch the other way.
-4. Do 3–4 such out-and-back pairs.
-5. Upload the file, set rider and bike weight, then calibrate.
+3. Optional (FIT files): with auto-lap off, press the lap button a second after you stop pedalling, and again just before you brake or pedal.
+4. Make a U-turn and coast over the same stretch the other way.
+5. Do 3–4 such out-and-back pairs.
+6. Upload the file, set rider and bike weight, then calibrate.
 
 ### How it works
 
@@ -181,10 +182,16 @@ This is linear in four coefficients, giving **CdA**, **Crr**, the **wind along t
 
 A run counts as part of the stretch when its heading is within about 35° of the longest run (either way) and it lies close to it. If there are too few runs in either direction, or the checkbox is cleared, the single-direction method above is used with the measured slope and fetched wind.
 
+### How runs are found
+
+In order of preference:
+
+- **Lap marks** (FIT lap messages). Every lap of 8 s to 5 min in which you end at least 1 m/s slower than you started is one run; the laps in between are ignored. Used when at least two laps qualify, and can be switched off with a checkbox.
+- With a **cadence** channel in the FIT file, coasting is every stretch of 8 s or more with the cranks stopped.
+- **With neither**, every sustained slow-down of 10 s or more on near-flat road is taken as coasting, so ride the test as described and don't soft-pedal. Several seconds are trimmed from each end of every run, so less data is used.
+
 ### Notes
 
-- With a **cadence** channel in the FIT file, coasting is every stretch of 8 s or more with the cranks stopped.
-- **Without cadence**, every sustained slow-down of 10 s or more on near-flat road is taken as coasting, so ride the test as described and don't soft-pedal. Several seconds are trimmed from each end of every run, so less data is used.
 - If the speed range is too narrow to separate rolling from air resistance, Crr is kept at its current value. You can also force this with the checkbox; it tightens the CdA estimate.
 
 ### Validation
@@ -192,6 +199,7 @@ A run counts as part of the stretch when its heading is within about 35° of the
 Checked only against simulated coast-downs (CdA 0.300, Crr 0.0050, 0.5 % slope), not yet against a real test ride:
 
 - Clean data: both values recovered exactly, by both methods.
+- Lap marks: in simulated FIT files they more than doubled the coasting time used (about 590 s against 265 s without cadence), with CdA 0.28–0.35 over four noise seeds. The reported ± stayed near 0.02, because the extra data is mostly low-speed coasting that says little about air drag.
 - Three out-and-back pairs with a 2 m/s wind that was not fetched, and GPS noise: the direction-aware fit gave CdA 0.28–0.31 (reported ± 0.02), and wind and slope within their reported errors. The single-direction method on the same files gave 0.13–0.22.
 
 ---

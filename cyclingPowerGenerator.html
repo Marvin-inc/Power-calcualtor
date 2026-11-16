@@ -726,6 +726,7 @@
       <ol>
         <li>Pick a straight, sheltered road, flat or with a steady gentle slope, on a calm dry day.</li>
         <li>Get up to about 40 km/h, stop pedalling, hold your normal riding position and coast down to about 15 km/h without braking.</li>
+        <li>Optional, FIT files only: with auto-lap off, press the lap button a second after you stop pedalling and again just before you brake or pedal. Each such lap becomes one run, which matters most without a cadence sensor.</li>
         <li>Make a U-turn and coast over the same stretch the other way. Do 3–4 such pairs, then upload that file here.</li>
         <li>Set rider and bike weight correctly first. With runs in both directions the wind and the road slope are solved from the data, so a steady breeze and a slight gradient are fine.</li>
       </ol>
@@ -734,6 +735,10 @@
     <div id="cal-status" class="cal-note"></div>
 
     <div id="cal-body">
+      <label id="cal-laps-row" style="display:none;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer">
+        <input type="checkbox" id="cal-laps" checked style="accent-color:var(--accent)" />
+        Use my lap marks as the coasting runs
+      </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:8px;cursor:pointer">
         <input type="checkbox" id="cal-paired" checked style="accent-color:var(--accent)" />
         Solve for wind and slope from the opposite-direction runs <span id="cal-paired-hint"></span>
@@ -1098,6 +1103,7 @@ function _decodeFIT(buffer) {
 
   const defs = {};   // localMsgType → definition
   const recs = [];   // collected GPS records
+  const laps = [];   // lap marks: { start, end } as Dates
   let pos = headerSize;
 
   while (pos < endOffset) {
@@ -1193,10 +1199,25 @@ function _decodeFIT(buffer) {
         }
       }
 
+      if (def.globalMsgNum === 19) {    // message 19 = "lap"
+        let start = null, end = null;
+        let fp = msgStart;
+        for (const f of def.fields) {
+          const v = _fitVal(view, fp, f);
+          if (v !== null && v !== 0xFFFFFFFF) {
+            if (f.fnum === 2)   start = new Date((v + FIT_EPOCH) * 1000);   // start_time
+            if (f.fnum === 253) end   = new Date((v + FIT_EPOCH) * 1000);   // timestamp = lap end
+          }
+          fp += f.size;
+        }
+        if (start && end && end > start) laps.push({ start, end });
+      }
+
       pos = msgStart + def.dataSize + def.devSize;
     }
   }
 
+  recs.laps = laps;
   return recs;
 }
 
@@ -1767,6 +1788,8 @@ function processRide(points, rawParams, weather) {
       wind,
       rho:   rhoArr.map(r => (r !== null && !isNaN(r)) ? r : params.rho),
       cad:   points.map(p => (p.cad !== null && p.cad !== undefined && !isNaN(p.cad)) ? p.cad : null),
+      laps:  (hasTime && points.laps ? points.laps : []).map(l => ({
+               t0: (l.start - points[0].time) / 1000, t1: (l.end - points[0].time) / 1000 })),
     },
     avgPower: avg(power),
     maxPower: Math.max(...power),
@@ -1799,11 +1822,48 @@ function processRide(points, rawParams, weather) {
 const G = 9.8067;
 const WHEEL_INERTIA_MASS = 1.5;   // kg — rotating wheels add ~1.5 kg of effective inertia
 
-function findCoastSegments(c) {
+// Coasting runs marked with the lap button: every lap of 8 s to 5 min in which
+// the rider ends clearly slower than they started. The laps in between (turning
+// round, getting back up to speed) don't qualify and are ignored.
+function findLapSegments(c, hasCad) {
+  const n = c.t.length, MIN_V = 3;
+  const segs = [];
+  c.laps.forEach(l => {
+    const dur = l.t1 - l.t0;
+    if (dur < 8 || dur > 300) return;
+    // Leave out the moments around each button press
+    let a = 0;
+    while (a < n && c.t[a] < l.t0 + 2) a++;
+    let b = n - 1;
+    while (b > a && c.t[b] > l.t1 - 1) b--;
+    while (b > a && c.v[b] < MIN_V) b--;          // drop the tail below usable speed
+    if (hasCad) {
+      // Keep the longest stretch with the cranks stopped
+      let best = null, st = -1;
+      for (let i = a; i <= b + 1; i++) {
+        const on = i <= b && c.cad[i] === 0;
+        if (on && st < 0) st = i;
+        if (!on && st >= 0) { if (!best || i - 1 - st > best.b - best.a) best = { a: st, b: i - 1 }; st = -1; }
+      }
+      if (!best) return;
+      a = best.a; b = best.b;
+    }
+    if (b <= a || c.t[b] - c.t[a] < 6) return;
+    if (c.v[a] - c.v[b] < 1) return;              // must slow down by 1 m/s or more
+    segs.push({ a, b });
+  });
+  return segs;
+}
+
+function findCoastSegments(c, useLaps = true) {
   const n = c.t.length;
   const hasCad = c.cad.filter(v => v !== null).length > n * 0.5;
   const minDur = hasCad ? 8 : 10;
   const MIN_V  = 3;               // m/s — below this GPS speed is too noisy
+
+  const lapSegs = findLapSegments(c, hasCad);
+  const lapsAvailable = lapSegs.length >= 2;
+  if (useLaps && lapsAvailable) return { segs: lapSegs, hasCad, source: 'laps', lapsAvailable };
 
   // Without cadence, coasting is recognised by a sustained slow-down. Use a
   // heavily smoothed speed so GPS jitter doesn't chop one run into pieces.
@@ -1845,7 +1905,7 @@ function findCoastSegments(c) {
       start = -1;
     }
   }
-  return { segs, hasCad };
+  return { segs, hasCad, source: hasCad ? 'cadence' : 'slowdown', lapsAvailable };
 }
 
 // Least-squares slope of y against x over indices a..b
@@ -2061,10 +2121,10 @@ function assignDirections(d, segs) {
   return refBearing;
 }
 
-function runCoastDown(d, mass, currentCrr, forceFixed, wantPaired = true) {
+function runCoastDown(d, mass, currentCrr, forceFixed, wantPaired = true, useLaps = true) {
   const c = d.calib;
-  const { segs, hasCad } = findCoastSegments(c);
-  const base = { segs, hasCad, hasEle: d.hasEle, hasWind: d.hasWind, mass, pairedAvailable: false };
+  const { segs, hasCad, source, lapsAvailable } = findCoastSegments(c, useLaps);
+  const base = { segs, hasCad, source, lapsAvailable, hasEle: d.hasEle, hasWind: d.hasWind, mass, pairedAvailable: false };
   if (!segs.length) return { ...base, error: 'none' };
 
   const refBearing = assignDirections(d, segs);
@@ -2125,7 +2185,9 @@ function renderCalibration() {
   const mass   = p.rider + p.bike;
   const fixed  = document.getElementById('cal-fix-crr').checked;
   const pairEl = document.getElementById('cal-paired');
-  const r      = runCoastDown(rideData, mass, p.crr, fixed, pairEl.checked);
+  const lapEl  = document.getElementById('cal-laps');
+  const r      = runCoastDown(rideData, mass, p.crr, fixed, pairEl.checked, lapEl.checked);
+  document.getElementById('cal-laps-row').style.display = r.lapsAvailable ? 'flex' : 'none';
   calResult    = r;
 
   const status = document.getElementById('cal-status');
@@ -2137,7 +2199,7 @@ function renderCalibration() {
     status.textContent = r.error === 'none'
       ? 'No coasting found in this file. ' + (r.hasCad
           ? 'It needs stretches of at least 8 s above 11 km/h with the cranks stopped.'
-          : 'It has no cadence data, so it needs clear slow-downs of at least 10 s on near-flat road.')
+          : 'It has no cadence data, so it needs clear slow-downs of at least 10 s on near-flat road, or coasting runs marked with the lap button.')
         + ' Ride the test described above and upload that file.'
       : 'Coasting was found, but too little of it is usable (braking, or runs too short). Three or four longer runs are needed.';
     return;
@@ -2151,18 +2213,19 @@ function renderCalibration() {
   if (r.fallback === 'paired-failed') notes.push('Solving for wind and slope from the two directions gave an implausible result, so the measured slope and fetched wind were used instead.');
   if (r.fallback === 'narrow') notes.push('The speed range is too narrow to separate rolling from air resistance, so Crr was kept at its current value. Coast from a higher speed down to a lower one to fit it too.');
   if (r.fallback === 'odd')    notes.push('Fitting Crr as well gave an implausible result, so Crr was kept at its current value.');
-  if (!r.hasCad)  notes.push('No cadence data: every sustained slow-down on near-flat road is treated as coasting. If you were pedalling lightly in any of them, CdA will read too low.');
+  if (r.source === 'slowdown') notes.push('No cadence data and no lap marks: every sustained slow-down on near-flat road is treated as coasting. If you were pedalling lightly in any of them, CdA will read too low.');
   if (!paired && !r.hasWind) notes.push('Wind was not fetched, so still air is assumed. Wind is the largest error source in this test.');
   if (!paired && !r.hasEle)  notes.push('No elevation data, so the road is assumed flat.');
   if (!paired && r.pairedAvailable === false && r.segs.length > 1) notes.push('Runs are not in both directions on one stretch, so slope and wind come from the altimeter and the weather service.');
   if (r.segs.some(g => g.dir === 0) && paired) notes.push('Runs off the main test stretch were left out.');
   if (r.totalTime < 60) notes.push('Only ' + Math.round(r.totalTime) + ' s of coasting in total; a minute or more gives a steadier result.');
   if (f.seCda > 0.03) notes.push('The uncertainty on CdA is large (± ' + f.seCda.toFixed(3) + '). More pairs of runs, longer coasting'
-                                + (r.hasCad ? '' : ', a cadence sensor') + (r.mode === 'free' ? ' or keeping Crr fixed' : '') + ' will tighten it.');
+                                + (r.source === 'slowdown' ? ', lap marks or a cadence sensor' : '') + (r.mode === 'free' ? ' or keeping Crr fixed' : '') + ' will tighten it.');
   if (f.r2 < 0.6) notes.push('The points scatter a lot around the fit (R² ' + f.r2.toFixed(2) + '), so treat the result as rough.');
 
   const summary = `${r.segs.length} coasting run${r.segs.length > 1 ? 's' : ''}, ${Math.round(r.totalTime)} s in total, `
                 + `${(r.vMax * 3.6).toFixed(0)} → ${(r.vMin * 3.6).toFixed(0)} km/h, system mass ${mass.toFixed(1)} kg. `
+                + ({ laps: 'Runs taken from your lap marks. ', cadence: 'Runs found from stopped cranks. ', slowdown: '' })[r.source]
                 + (paired ? 'Wind and slope solved from the two directions.' : 'Using measured slope and fetched wind.');
   status.innerHTML = summary + (notes.length ? '<br>' + notes.join('<br>') : '');
   if (!notes.length) status.classList.add('ok');
@@ -2249,6 +2312,7 @@ document.getElementById('calibrate-btn').addEventListener('click', () => {
 });
 document.getElementById('cal-fix-crr').addEventListener('change', renderCalibration);
 document.getElementById('cal-paired').addEventListener('change', renderCalibration);
+document.getElementById('cal-laps').addEventListener('change', renderCalibration);
 document.getElementById('cal-modal-overlay').addEventListener('click', e => {
   if (e.target.id === 'cal-modal-overlay') closeCalibration();
 });
