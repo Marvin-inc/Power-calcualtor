@@ -48,8 +48,8 @@ P = (F_gravity + F_rolling + F_aero + F_kinetic) × v_ground / η
 | Gravity | `F_g = m·g·sin(arctan(grade))` |
 | Rolling resistance | `F_r = m·g·cos(arctan(grade))·Crr` |
 | Aerodynamic drag | `F_a = ½·ρ·CdA·v_eff·\|v_eff\|` |
-| Kinetic energy | `F_k = m·a` (a = dv/dt, central difference on smoothed speed) |
-| Effective airspeed | `v_eff = v_ground + wind_speed·cos(wind_from − bearing)` |
+| Kinetic energy | `F_k = m_eff·a` (a = dv/dt, central difference on smoothed speed; m_eff = m + 1.5 kg for the rotating wheels) |
+| Effective airspeed | `v_eff = v_ground + 0.6·wind_speed_10m·cos(wind_from − bearing)` |
 
 - **m** = rider weight + bike weight (kg)
 - **g** = 9.8067 m/s²
@@ -62,7 +62,9 @@ P = (F_gravity + F_rolling + F_aero + F_kinetic) × v_ground / η
 
 ### Accuracy improvements over a basic steady-state model
 
-**Kinetic energy term.** `P_k = m·v·a` is added so the model reflects real power-meter behaviour: power rises on surges and drops to zero when coasting. The term integrates to ≈ 0 over a closed loop and does not bias average power.
+**Kinetic energy term.** `P_k = m_eff·v·a` is added so the model reflects real power-meter behaviour: power rises on surges and drops to zero when coasting. The term integrates to ≈ 0 over a closed loop and does not bias average power.
+
+**Wind at rider height.** Open-Meteo gives wind at 10 m above ground; at a rider's height (about 1.2 m) it is weaker. A log wind profile over open country gives a factor of about 0.6, applied to the fetched wind before the headwind component is used, in the ride model and in the coast-down calibration alike.
 
 **Elevation smoothed before computing grade.** GPS and barometric altitude are noisy. Because grade is a derivative, raw elevation noise produces large spurious gravity-power spikes. Elevation is smoothed with a 10 s centred time-aware window before grade is computed.
 

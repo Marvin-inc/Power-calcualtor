@@ -1311,6 +1311,11 @@ function airDensity(T_c, P_msl, rh, h) {
 //   wind[i] = headwind component at point i (m/s; positive = headwind)
 //   rho[i]  = air density at point i (kg/m³), computed from temperature,
 //             humidity, MSL pressure and rider elevation.
+// Open-Meteo gives wind at 10 m above ground. A rider's body is at about 1.2 m,
+// where the wind is weaker: a log wind profile over open country
+// (roughness length ~0.05 m) gives ln(1.2/0.05) / ln(10/0.05) ≈ 0.6.
+const WIND_HEIGHT_FACTOR = 0.6;
+
 async function fetchWindData(points) {
   const hasTime = points.every(p => p.time instanceof Date && !isNaN(p.time));
   if (!hasTime) throw new Error('GPX file has no timestamps — cannot look up historical wind');
@@ -1408,7 +1413,7 @@ async function fetchWindData(points) {
     const ts = points[i].time.getTime();
     const { speed, dir } = interpolateWind(ts);
     const angleDiff = (dir - bearings[i]) * Math.PI / 180;
-    wind.push(speed * Math.cos(angleDiff));
+    wind.push(WIND_HEIGHT_FACTOR * speed * Math.cos(angleDiff));
 
     const T = interpScalar(hourlyTemp, ts);
     const R = interpScalar(hourlyRH,   ts);
@@ -1732,7 +1737,8 @@ function processRide(points, rawParams, weather) {
     // Kinetic-energy power: P_k = m·v·a (positive when accelerating, negative when
     // decelerating). On a closed loop this term integrates to ~0, but it shifts
     // power into surges and out of coasting, matching real power-meter traces.
-    const fKin   = mass * a;
+    // Rotating wheels add inertia: same effective mass as the coast-down calibration.
+    const fKin   = (mass + WHEEL_INERTIA_MASS) * a;
 
     const f      = fGrav + fRoll + fAero + fKin;
     const p      = Math.max(0, f * v / eff);
