@@ -151,8 +151,9 @@ While you coast, your power is exactly zero, so the rate at which you slow down 
 
 1. Pick a straight, sheltered road, flat or with a steady gentle slope, on a calm dry day.
 2. Get up to about 40 km/h, stop pedalling, hold your normal position and coast down to about 15 km/h without braking.
-3. Repeat 3–4 times, in both directions.
-4. Upload the file, set rider and bike weight, fetch wind & weather, then calibrate.
+3. Make a U-turn and coast over the same stretch the other way.
+4. Do 3–4 such out-and-back pairs.
+5. Upload the file, set rider and bike weight, then calibrate.
 
 ### How it works
 
@@ -168,11 +169,30 @@ F = −(m_eff · a + m·g·slope)  =  Crr·m·g  +  CdA·q        q = ½·ρ·v_
 
 A straight line through the (q, F) points has slope **CdA** and intercept **Crr·m·g**. Windows that look like braking or pedalling, and outliers beyond 2.5σ, are dropped. The modal shows the fitted values with their standard errors, R², the scatter plot and a table of the detected runs; **Apply & recalculate** writes them into the parameters.
 
-- With a **cadence** channel in the FIT file, coasting is every stretch of 8 s or more with the cranks stopped.
-- **Without cadence**, every sustained slow-down of 10 s or more on near-flat road is taken as coasting, so ride the test as described and don't soft-pedal.
-- If the speed range is too narrow to separate the two, Crr is kept at its current value and only CdA is fitted. You can also force this with the checkbox.
+### Out-and-back runs: solving for wind and slope
 
-Checked against simulated coast-downs with known CdA 0.300 and Crr 0.0050: recovered exactly on clean data, and within the reported ± on noisy GPS data. Wind is the main real-world error source, which is why a calm day and runs in both directions matter.
+When the file has runs in both directions over the same stretch, the fit no longer relies on the altimeter or the weather service. Gravity and the main wind effect flip sign with direction, so they can be solved from the data. With `d = ±1` for the direction of travel:
+
+```
+−m_eff · a  =  Crr·m·g  +  d·m·g·s  +  ½·ρ·CdA·(v + d·w)²
+```
+
+This is linear in four coefficients, giving **CdA**, **Crr**, the **wind along the road** `w` and the **road slope** `s` in one regression. The modal shows the solved wind and slope next to the altimeter and weather-service values as a cross-check, and the plot shows both directions on one line once slope and wind are removed.
+
+A run counts as part of the stretch when its heading is within about 35° of the longest run (either way) and it lies close to it. If there are too few runs in either direction, or the checkbox is cleared, the single-direction method above is used with the measured slope and fetched wind.
+
+### Notes
+
+- With a **cadence** channel in the FIT file, coasting is every stretch of 8 s or more with the cranks stopped.
+- **Without cadence**, every sustained slow-down of 10 s or more on near-flat road is taken as coasting, so ride the test as described and don't soft-pedal. Several seconds are trimmed from each end of every run, so less data is used.
+- If the speed range is too narrow to separate rolling from air resistance, Crr is kept at its current value. You can also force this with the checkbox; it tightens the CdA estimate.
+
+### Validation
+
+Checked only against simulated coast-downs (CdA 0.300, Crr 0.0050, 0.5 % slope), not yet against a real test ride:
+
+- Clean data: both values recovered exactly, by both methods.
+- Three out-and-back pairs with a 2 m/s wind that was not fetched, and GPS noise: the direction-aware fit gave CdA 0.28–0.31 (reported ± 0.02), and wind and slope within their reported errors. The single-direction method on the same files gave 0.13–0.22.
 
 ---
 
