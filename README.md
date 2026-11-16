@@ -19,6 +19,7 @@ A fully client-side web app that estimates **cycling power output** from a GPX o
 | **Map** | Route rendered on a dark Leaflet map, polyline coloured by power intensity |
 | **FIT export** | Downloads the original FIT file with the calculated power channel added (field 7), all original data preserved |
 | **CdA estimator** | Estimates CdA from height, mass, shoulder width, seat-tube angle and torso angle using five published equations; position presets and a bike-drag component give realistic total CdA values |
+| **Coast-down calibration** | Measures your real CdA and Crr from coasting runs in a ride file — no power meter needed |
 | **Recalculate** | Change any parameter live — no need to re-upload |
 
 ---
@@ -29,7 +30,7 @@ A fully client-side web app that estimates **cycling power output** from a GPX o
 2. Drop your `.gpx` or `.fit` file onto the upload zone.
 3. Adjust the rider/equipment parameters. Click **👤 Estimate** next to CdA to open the CdA estimator.
 4. Optionally click **Fetch Wind & Weather** (requires internet; only available when the file contains timestamps).
-5. Inspect the stats, charts and map.
+5. Inspect the stats, charts and map. Click **🏁 Calibrate (coast-down)** if the file contains a coast-down test.
 6. For FIT files, click **Export FIT with Power** to download a copy of the original file with the power channel embedded.
 
 ---
@@ -139,6 +140,39 @@ Each row shows **Rider A → Rider CdA → + Bike → Total CdA**. Any row (or t
 | Upright / touring | 73° | 55° | 1.05 | 0.055 m² | 0.46–0.50 m² |
 
 > **Note.** Heil's equations were fit exclusively on TT cyclists (TA 5–25°) and their TA exponent is only ~0.1, so they under-respond at road or upright torso angles. Position-appropriate Cd values are the main mechanism for capturing the large drag increase when sitting up. Total uncertainty is approximately ±0.016–0.019 m² rider CdA (5–10%).
+
+---
+
+## Coast-down calibration
+
+While you coast, your power is exactly zero, so the rate at which you slow down is set only by rolling resistance and air drag. Click **🏁 Calibrate (coast-down)** after loading a ride that contains coasting runs.
+
+### Riding the test
+
+1. Pick a straight, sheltered road, flat or with a steady gentle slope, on a calm dry day.
+2. Get up to about 40 km/h, stop pedalling, hold your normal position and coast down to about 15 km/h without braking.
+3. Repeat 3–4 times, in both directions.
+4. Upload the file, set rider and bike weight, fetch wind & weather, then calibrate.
+
+### How it works
+
+Each coasting run is cut into 5-second windows. For each window:
+
+```
+F = −(m_eff · a + m·g·slope)  =  Crr·m·g  +  CdA·q        q = ½·ρ·v_air²
+```
+
+- **a** is the slope of a straight line fitted through the raw speed samples of that window.
+- **slope** is one road gradient per run, from a line fitted through the elevation.
+- **m_eff** = m + 1.5 kg, to account for the rotating wheels.
+
+A straight line through the (q, F) points has slope **CdA** and intercept **Crr·m·g**. Windows that look like braking or pedalling, and outliers beyond 2.5σ, are dropped. The modal shows the fitted values with their standard errors, R², the scatter plot and a table of the detected runs; **Apply & recalculate** writes them into the parameters.
+
+- With a **cadence** channel in the FIT file, coasting is every stretch of 8 s or more with the cranks stopped.
+- **Without cadence**, every sustained slow-down of 10 s or more on near-flat road is taken as coasting, so ride the test as described and don't soft-pedal.
+- If the speed range is too narrow to separate the two, Crr is kept at its current value and only CdA is fitted. You can also force this with the checkbox.
+
+Checked against simulated coast-downs with known CdA 0.300 and Crr 0.0050: recovered exactly on clean data, and within the reported ± on noisy GPS data. Wind is the main real-world error source, which is why a calm day and runs in both directions matter.
 
 ---
 
